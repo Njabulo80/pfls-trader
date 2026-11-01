@@ -128,8 +128,11 @@ const elements = {
         console.error("Deriv API error:", data.error);
         return;
       }
-
-      if (data.msg_type === "history" && data.candles) {
+if (
+  (data.msg_type === "history" || data.msg_type === "candles") &&
+  data.candles
+) {
+      {
         candles = data.candles.map(candle => ({
           epoch: Number(candle.epoch),
           open: Number(candle.open),
