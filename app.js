@@ -1,84 +1,95 @@
+/* ==========================================
+   PFLS TRADER
+   Price Flow Ladder Sequence
+   Market: Deriv Volatility 75 Standard
+   Symbol: R_75
 
-/*
-  PFLS TRADER
-  Price Flow Ladder Sequence
-  Market: Deriv Volatility 75 Standard (R_75)
-
-  Research prototype:
-  - Reads public market data
-  - Builds candles and timeframe analysis
-  - Identifies heuristic supply/demand candidates
-  - Does not execute trades
-*/
+   Research prototype:
+   - Public market data only
+   - Eight timeframe analysis
+   - Experimental supply/demand detection
+   - No automatic trade execution
+========================================== */
 
 (() => {
   "use strict";
 
   const SYMBOL = "R_75";
-  const WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public";
+  const WS_URL =
+    "wss://api.derivws.com/trading/v1/options/ws/public";
 
   const TIMEFRAMES = [
-    { label: "1M", value: "1m", seconds: 60 },
-    { label: "5M", value: "5m", seconds: 300 },
-    { label: "15M", value: "15m", seconds: 900 },
-    { label: "30M", value: "30m", seconds: 1800 },
-    { label: "1H", value: "1h", seconds: 3600 },
-    { label: "4H", value: "4h", seconds: 14400 },
-    { label: "1D", value: "1d", seconds: 86400 },
-    { label: "1W", value: "1w", seconds: 604800 }
+    { id: "1w", label: "1W", seconds: 604800, source: 86400 },
+    { id: "1d", label: "1D", seconds: 86400, source: 86400 },
+    { id: "4h", label: "4H", seconds: 14400, source: 14400 },
+    { id: "1h", label: "1H", seconds: 3600, source: 3600 },
+    { id: "30m", label: "30M", seconds: 1800, source: 1800 },
+    { id: "15m", label: "15M", seconds: 900, source: 900 },
+    { id: "5m", label: "5M", seconds: 300, source: 300 },
+    { id: "1m", label: "1M", seconds: 60, source: 60 }
   ];
 
-  const $ = (id) => document.getElementById(id);
+  const $ = id => document.getElementById(id);
 
-  const find = (...ids) => {
-    for (const id of ids) {
-      const element = $(id);
-      if (element) return element;
-    }
-    return null;
+  const elements = {
+    connect: $("connectBtn"),
+    refresh: $("refreshBtn"),
+    timeframe: $("chartTf"),
+    status: $("connection"),
+    chart: $("chart"),
+    empty: $("chartEmpty"),
+    price: $("price"),
+    priceChange: $("priceChange"),
+    demand: $("nearestDemand"),
+    demandMeta: $("demandMeta"),
+    supply: $("nearestSupply"),
+    supplyMeta: $("supplyMeta"),
+    opposing: $("nextTarget"),
+    targetMeta: $("targetMeta"),
+    ladder: $("tfGrid"),
+    zones: $("zoneRows"),
+    zoneCount: $("zoneCount"),
+    structure: $("structure"),
+    chartTitle: $("chartTitle")
   };
 
-  
-const elements = {
-  connect: find("connectBtn"),
-  refresh: find("refreshBtn"),
-  timeframe: find("chartTf"),
-  status: find("connection"),
-  chart: find("chart"),
-  empty: find("chartEmpty"),
-  price: find("price"),
-  demand: find("nearestDemand"),
-  supply: find("nearestSupply"),
-  opposing: find("nextTarget"),
-  ladder: find("tfGrid"),
-  zones: find("zoneRows"),
-  structure: find("structure"),
-  confirm: null
-};
-
-
   let socket = null;
-  let candles = [];
   let currentPrice = null;
-  let selectedTimeframe = "1m";
-  let detectedZones = [];
-  let latestTickTime = null;
+  let selectedTimeframe = elements.timeframe
+    ? elements.timeframe.value
+    : "1m";
+
+  let reconnectTimer = null;
+  let requestCounter = 100;
+
+  const marketData = {};
+  const requestMap = {};
+
+  TIMEFRAMES.forEach(tf => {
+    marketData[tf.id] = [];
+  });
+
+  /* ------------------------------------------
+     BASIC HELPERS
+  ------------------------------------------ */
 
   function setText(element, value) {
     if (element) element.textContent = value;
   }
 
-  function setStatus(message) {
-    setText(elements.status, message);
-  }
+  function setStatus(message, online = false) {
+    if (!elements.status) return;
 
-  function timeframeInfo(value) {
-    return TIMEFRAMES.find(item => item.value === value) || TIMEFRAMES[0];
+    elements.status.textContent = online
+      ? "● " + message
+      : "● " + message;
+
+    elements.status.classList.toggle("online", online);
+    elements.status.classList.toggle("offline", !online);
   }
 
   function send(payload) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setStatus("Not connected");
       return false;
     }
 
@@ -86,25 +97,40 @@ const elements = {
     return true;
   }
 
+  function getSeries(timeframe) {
+    return marketData[timeframe] || [];
+  }
+
+  function formatPrice(value) {
+    return Number(value).toFixed(2);
+  }
+
+  /* ------------------------------------------
+     DERIV CONNECTION
+  ------------------------------------------ */
+
   function connectMarket() {
-    if (socket && socket.readyState === WebSocket.OPEN) {
+    clearTimeout(reconnectTimer);
+
+    if (socket) {
+      socket.onclose = null;
       socket.close();
     }
 
-    setStatus("Connecting to Deriv...");
+    setStatus("CONNECTING TO DERIV");
 
     try {
       socket = new WebSocket(WS_URL);
     } catch (error) {
-      setStatus("Connection could not start");
       console.error(error);
+      setStatus("CONNECTION FAILED");
       return;
     }
 
     socket.onopen = () => {
-      setStatus("Connected — requesting market data");
+      setStatus("CONNECTED", true);
 
-      requestCandles();
+      requestAllTimeframes();
 
       send({
         ticks: SYMBOL,
@@ -113,120 +139,135 @@ const elements = {
       });
     };
 
-    socket.onmessage = (event) => {
+    socket.onmessage = event => {
       let data;
 
       try {
         data = JSON.parse(event.data);
       } catch (error) {
-        console.error("Invalid server response", error);
+        console.error("Invalid API response", error);
         return;
       }
 
       if (data.error) {
-        setStatus("API error: " + data.error.message);
-        console.error("Deriv API error:", data.error);
+        console.error("Deriv error:", data.error);
+        setStatus("API ERROR: " + data.error.message);
         return;
       }
-if (
-  (data.msg_type === "history" || data.msg_type === "candles") &&
-  data.candles
-) {
-      {
-        candles = data.candles.map(candle => ({
+
+      handleMarketMessage(data);
+    };
+
+    socket.onerror = error => {
+      console.error("WebSocket error:", error);
+      setStatus("CONNECTION ERROR");
+    };
+
+    socket.onclose = () => {
+      setStatus("DISCONNECTED");
+    };
+  }
+
+  /* ------------------------------------------
+     REQUEST ALL EIGHT TIMEFRAMES
+  ------------------------------------------ */
+
+  function requestAllTimeframes() {
+    TIMEFRAMES.forEach(tf => {
+      const reqId = ++requestCounter;
+
+      requestMap[reqId] = tf.id;
+
+      send({
+        ticks_history: SYMBOL,
+        style: "candles",
+        granularity: tf.source,
+        count: tf.id === "1w" ? 500 : 300,
+        end: "latest",
+        req_id: reqId
+      });
+    });
+  }
+
+  /* ------------------------------------------
+     HANDLE DERIV MESSAGES
+  ------------------------------------------ */
+
+  function handleMarketMessage(data) {
+
+    // Historical candle response
+    if (
+      data.msg_type === "candles" &&
+      Array.isArray(data.candles)
+    ) {
+      const timeframe = requestMap[data.req_id];
+
+      if (!timeframe) {
+        console.warn("Unknown candle request:", data.req_id);
+        return;
+      }
+
+      marketData[timeframe] = data.candles
+        .map(candle => ({
           epoch: Number(candle.epoch),
           open: Number(candle.open),
           high: Number(candle.high),
           low: Number(candle.low),
           close: Number(candle.close)
-        }));
+        }))
+        .filter(candle =>
+          Number.isFinite(candle.epoch) &&
+          Number.isFinite(candle.open) &&
+          Number.isFinite(candle.high) &&
+          Number.isFinite(candle.low) &&
+          Number.isFinite(candle.close)
+        )
+        .sort((a, b) => a.epoch - b.epoch);
 
-        candles.sort((a, b) => a.epoch - b.epoch);
-        renderAnalysis();
-        setStatus("Live market data connected");
+      if (timeframe === "1d") {
+        rebuildWeeklyCandles();
       }
 
-      if (data.msg_type === "tick" && data.tick) {
-        updateFromTick(data.tick);
-      }
-    };
+      renderEverything();
 
-    socket.onerror = () => {
-      setStatus("Connection error — check internet");
-    };
+      const loaded = TIMEFRAMES.filter(tf =>
+        marketData[tf.id].length > 0
+      ).length;
 
-    socket.onclose = () => {
-      setStatus("Disconnected — tap Connect");
-    };
-  }
+      setStatus(
+        "CONNECTED · " + loaded + "/8 TIMEFRAMES",
+        true
+      );
 
-  function requestCandles() {
-    const tf = timeframeInfo(selectedTimeframe);
+      return;
+    }
 
-    // Deriv supports daily candles up to 1 day.
-    // Weekly candles are created from daily candles locally.
-    const weekly = selectedTimeframe === "1w";
+    // Live tick response
+    if (data.msg_type === "tick" && data.tick) {
+      updateLivePrice(data.tick);
+    }
 
-    send({
-      ticks_history: SYMBOL,
-      style: "candles",
-      granularity: weekly ? 86400 : tf.seconds,
-      count: weekly ? 500 : 350,
-      end: "latest",
-      req_id: 1
-    });
-  }
-
-  function updateFromTick(tick) {
-    const price = Number(tick.quote);
-    const epoch = Number(tick.epoch);
-
-    if (!Number.isFinite(price)) return;
-
-    currentPrice = price;
-    latestTickTime = epoch;
-
-    setText(elements.price, price.toFixed(2));
-
-    if (candles.length) {
-      const tf = timeframeInfo(selectedTimeframe);
-      const candleSeconds = selectedTimeframe === "1w"
-        ? 604800
-        : tf.seconds;
-
-      const candleStart = Math.floor(epoch / candleSeconds) * candleSeconds;
-      const last = candles[candles.length - 1];
-
-      if (last && last.epoch === candleStart) {
-        last.close = price;
-        last.high = Math.max(last.high, price);
-        last.low = Math.min(last.low, price);
-      } else if (last && candleStart > last.epoch) {
-        candles.push({
-          epoch: candleStart,
-          open: last.close,
-          high: price,
-          low: price,
-          close: price
-        });
-
-        if (candles.length > 350) candles.shift();
-      }
-
-      renderAnalysis();
+    // Some API errors or unexpected messages are useful to inspect.
+    if (data.msg_type && data.msg_type !== "tick") {
+      console.log("Deriv message:", data.msg_type);
     }
   }
 
-  function aggregateWeekly(dailyCandles) {
+  /* ------------------------------------------
+     WEEKLY CANDLE AGGREGATION
+  ------------------------------------------ */
+
+  function rebuildWeeklyCandles() {
+    const daily = marketData["1d"];
     const groups = new Map();
 
-    dailyCandles.forEach(candle => {
+    daily.forEach(candle => {
       const date = new Date(candle.epoch * 1000);
       const day = date.getUTCDay();
-      const mondayOffset = (day + 6) % 7;
+      const offset = (day + 6) % 7;
 
       const monday = new Date(date);
-      monday.setUTCDate(date.getUTCDate() - mondayOffset);
+      monday.setUTCDate(date.getUTCDate() - offset);
       monday.setUTCHours(0, 0, 0, 0);
 
       const start = Math.floor(monday.getTime() / 1000);
@@ -241,83 +282,138 @@ if (
         });
       } else {
         const group = groups.get(start);
+
         group.high = Math.max(group.high, candle.high);
         group.low = Math.min(group.low, candle.low);
         group.close = candle.close;
       }
     });
 
-    return [...groups.values()];
+    marketData["1w"] = [...groups.values()];
   }
 
-  function getAnalysisCandles() {
-    if (selectedTimeframe === "1w") {
-      return aggregateWeekly(candles);
+  /* ------------------------------------------
+     LIVE PRICE AND CANDLE UPDATES
+  ------------------------------------------ */
+
+  function updateLivePrice(tick) {
+    const price = Number(tick.quote);
+    const epoch = Number(tick.epoch);
+
+    if (!Number.isFinite(price) || !Number.isFinite(epoch)) {
+      return;
     }
-    return candles;
+
+    currentPrice = price;
+
+    setText(elements.price, formatPrice(price));
+    setText(elements.priceChange, "Live Deriv market quote");
+
+    TIMEFRAMES.filter(tf => tf.id !== "1w")
+      .forEach(tf => {
+        const series = marketData[tf.id];
+
+        if (!series.length) return;
+
+        const start =
+          Math.floor(epoch / tf.seconds) * tf.seconds;
+
+        const last = series[series.length - 1];
+
+        if (last.epoch === start) {
+          last.close = price;
+          last.high = Math.max(last.high, price);
+          last.low = Math.min(last.low, price);
+        } else if (start > last.epoch) {
+          series.push({
+            epoch: start,
+            open: last.close,
+            high: price,
+            low: price,
+            close: price
+          });
+
+          if (series.length > 350) series.shift();
+        }
+      });
+
+    rebuildWeeklyCandles();
+    renderEverything();
   }
 
-  /*
-    Experimental zone detector.
+  /* ------------------------------------------
+     EXPERIMENTAL ZONE DETECTION
+  ------------------------------------------ */
 
-    It searches for a small candle/base followed by a
-    relatively strong move away from that price area.
-
-    This is a research heuristic, not proof of institutional
-    orders, actual order flow, or future price direction.
-  */
-  function detectZones(data) {
+  function detectZones(series, timeframe) {
     const zones = [];
 
-    if (!data || data.length < 15) return zones;
+    if (!series || series.length < 15) {
+      return zones;
+    }
 
-    const recent = data.slice(-180);
+    const data = series.slice(-180);
 
-    for (let i = 3; i < recent.length - 2; i++) {
-      const base = recent[i];
-      const before = recent[i - 1];
-      const after = recent[i + 1];
+    for (let i = 3; i < data.length - 2; i++) {
+      const base = data[i];
+      const previous = data[i - 1];
+      const next = data[i + 1];
 
-      const range = base.high - base.low;
-      if (range <= 0) continue;
+      const baseRange = base.high - base.low;
 
-      const body = Math.abs(base.close - base.open);
-      const nextBody = Math.abs(after.close - after.open);
+      if (baseRange <= 0) continue;
 
-      const averageRange = recent
+      const recentRanges = data
         .slice(Math.max(0, i - 10), i)
-        .reduce((sum, candle) =>
-          sum + (candle.high - candle.low), 0) / Math.min(i, 10);
+        .map(c => c.high - c.low);
 
-      if (!averageRange || range > averageRange * 1.5) continue;
+      if (!recentRanges.length) continue;
 
-      const strongMove = nextBody > averageRange * 1.15;
-      if (!strongMove) continue;
+      const averageRange =
+        recentRanges.reduce((a, b) => a + b, 0) /
+        recentRanges.length;
 
-      const bullish = after.close > after.open;
-      const bearish = after.close < after.open;
+      if (!averageRange || baseRange > averageRange * 1.5) {
+        continue;
+      }
 
-      if (bullish && after.close > base.high) {
+      const nextBody = Math.abs(next.close - next.open);
+
+      if (nextBody < averageRange * 1.15) continue;
+
+      const bullish =
+        next.close > next.open &&
+        next.close > base.high;
+
+      const bearish =
+        next.close < next.open &&
+        next.close < base.low;
+
+      if (bullish) {
         zones.push({
           type: "Demand",
-          low: Math.min(base.low, before.low),
+          timeframe,
+          low: Math.min(base.low, previous.low),
           high: Math.max(base.open, base.close),
           epoch: base.epoch,
-          score: Math.min(95, Math.round(
-            55 + (nextBody / averageRange) * 10
-          ))
+          score: Math.min(
+            95,
+            Math.round(55 + nextBody / averageRange * 10)
+          )
         });
       }
 
-      if (bearish && after.close < base.low) {
+      if (bearish) {
         zones.push({
           type: "Supply",
+          timeframe,
           low: Math.min(base.open, base.close),
-          high: Math.max(base.high, before.high),
+          high: Math.max(base.high, previous.high),
           epoch: base.epoch,
-          score: Math.min(95, Math.round(
-            55 + (nextBody / averageRange) * 10
-          ))
+          score: Math.min(
+            95,
+            Math.round(55 + nextBody / averageRange * 10)
+          )
         });
       }
     }
@@ -325,57 +421,144 @@ if (
     return zones;
   }
 
-  function analyseZones() {
-    const data = getAnalysisCandles();
-    detectedZones = detectZones(data);
+  /* ------------------------------------------
+     ALL TIMEFRAME ANALYSIS
+  ------------------------------------------ */
 
-    if (currentPrice === null && data.length) {
-      currentPrice = data[data.length - 1].close;
+  function collectAllZones() {
+    let zones = [];
+
+    TIMEFRAMES.forEach(tf => {
+      const series = getSeries(tf.id);
+
+      zones = zones.concat(
+        detectZones(series, tf.id)
+      );
+    });
+
+    return zones;
+  }
+
+  function getNearestZones(zones) {
+    if (currentPrice === null) {
+      return { demand: null, supply: null };
     }
 
-    const demands = detectedZones
-      .filter(zone => zone.type === "Demand" && zone.high < currentPrice)
+    const demand = zones
+      .filter(zone =>
+        zone.type === "Demand" &&
+        zone.high <= currentPrice
+      )
       .sort((a, b) => b.high - a.high);
 
-    const supplies = detectedZones
-      .filter(zone => zone.type === "Supply" && zone.low > currentPrice)
+    const supply = zones
+      .filter(zone =>
+        zone.type === "Supply" &&
+        zone.low >= currentPrice
+      )
       .sort((a, b) => a.low - b.low);
 
-    const nearestDemand = demands[0];
-    const nearestSupply = supplies[0];
+    return {
+      demand: demand[0] || null,
+      supply: supply[0] || null
+    };
+  }
 
-    setText(elements.demand, nearestDemand
-      ? `${nearestDemand.low.toFixed(2)} – ${nearestDemand.high.toFixed(2)}`
-      : "No candidate found");
+  function renderZoneSummary(zones) {
+    const nearest = getNearestZones(zones);
 
-    setText(elements.supply, nearestSupply
-      ? `${nearestSupply.low.toFixed(2)} – ${nearestSupply.high.toFixed(2)}`
-      : "No candidate found");
+    if (nearest.demand) {
+      setText(
+        elements.demand,
+        formatPrice(nearest.demand.low) +
+        " – " +
+        formatPrice(nearest.demand.high)
+      );
+
+      setText(
+        elements.demandMeta,
+        nearest.demand.timeframe.toUpperCase() +
+        " · Candidate rating " +
+        nearest.demand.score +
+        "/100"
+      );
+    } else {
+      setText(elements.demand, "No candidate found");
+      setText(elements.demandMeta, "Awaiting a qualifying zone");
+    }
+
+    if (nearest.supply) {
+      setText(
+        elements.supply,
+        formatPrice(nearest.supply.low) +
+        " – " +
+        formatPrice(nearest.supply.high)
+      );
+
+      setText(
+        elements.supplyMeta,
+        nearest.supply.timeframe.toUpperCase() +
+        " · Candidate rating " +
+        nearest.supply.score +
+        "/100"
+      );
+    } else {
+      setText(elements.supply, "No candidate found");
+      setText(elements.supplyMeta, "Awaiting a qualifying zone");
+    }
 
     let opposing = null;
 
-    if (nearestDemand) opposing = nearestSupply;
-    else if (nearestSupply) opposing = nearestDemand;
+    if (nearest.demand) opposing = nearest.supply;
+    else if (nearest.supply) opposing = nearest.demand;
 
-    setText(elements.opposing, opposing
-      ? `${opposing.type}: ${opposing.low.toFixed(2)} – ${opposing.high.toFixed(2)}`
-      : "No opposing zone identified");
+    setText(
+      elements.opposing,
+      opposing
+        ? opposing.type + " · " +
+          formatPrice(opposing.low) + " – " +
+          formatPrice(opposing.high)
+        : "Not determined"
+    );
 
-    renderZoneTable();
-    renderLadder();
-    renderStructure();
+    setText(
+      elements.targetMeta,
+      "Candidate zones only. Confirm price action manually."
+    );
   }
 
-  function renderZoneTable() {
+  /* ------------------------------------------
+     ZONE TABLE
+  ------------------------------------------ */
+
+  function renderZoneTable(zones) {
     if (!elements.zones) return;
 
     elements.zones.innerHTML = "";
 
-    const sorted = [...detectedZones].slice(-25).reverse();
+    const sorted = zones
+      .filter(zone => currentPrice !== null)
+      .map(zone => ({
+        ...zone,
+        distance: zone.type === "Demand"
+          ? Math.max(0, currentPrice - zone.high)
+          : Math.max(0, zone.low - currentPrice)
+      }))
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 25);
+
+    setText(elements.zoneCount, zones.length + " zones");
 
     if (!sorted.length) {
-      elements.zones.innerHTML =
-        '<tr><td colspan="5">No candidate zones detected yet.</td></tr>';
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+
+      cell.colSpan = 6;
+      cell.className = "empty-row";
+      cell.textContent = "No qualifying zones detected yet.";
+
+      row.appendChild(cell);
+      elements.zones.appendChild(row);
       return;
     }
 
@@ -384,10 +567,11 @@ if (
 
       const values = [
         zone.type,
-        zone.low.toFixed(2),
-        zone.high.toFixed(2),
-        zone.score + "/100",
-        new Date(zone.epoch * 1000).toLocaleString()
+        zone.timeframe.toUpperCase(),
+        formatPrice(zone.low) + " – " + formatPrice(zone.high),
+        formatPrice(zone.distance),
+        "Candidate",
+        zone.score + "/100"
       ];
 
       values.forEach(value => {
@@ -400,53 +584,97 @@ if (
     });
   }
 
+  /* ------------------------------------------
+     TIMEFRAME LADDER
+  ------------------------------------------ */
+
   function renderLadder() {
     if (!elements.ladder) return;
 
     elements.ladder.innerHTML = "";
 
     TIMEFRAMES.forEach(tf => {
+      const series = getSeries(tf.id);
       const item = document.createElement("div");
-      item.className = "tf-item";
 
-      const label = document.createElement("strong");
-      label.textContent = tf.label;
+      item.className = "tf-card";
 
-      const detail = document.createElement("span");
-      detail.textContent = selectedTimeframe === tf.value
-        ? "Selected chart"
-        : "Awaiting scan";
+      const heading = document.createElement("b");
+      heading.textContent = tf.label;
 
-      item.append(label, detail);
+      const direction = document.createElement("span");
+      const small = document.createElement("small");
+
+      if (series.length >= 2) {
+        const first = series[0];
+        const last = series[series.length - 1];
+
+        direction.textContent =
+          last.close > first.close ? "↑ Bullish" :
+          last.close < first.close ? "↓ Bearish" :
+          "→ Neutral";
+
+        small.textContent = series.length + " candles";
+      } else {
+        direction.textContent = "—";
+        small.textContent = "Awaiting data";
+      }
+
+      item.append(heading, direction, small);
+
+      if (tf.id === selectedTimeframe) {
+        item.style.outline = "1px solid #23c58e";
+      }
+
       elements.ladder.appendChild(item);
     });
   }
 
-  function renderStructure() {
-    const data = getAnalysisCandles();
+  /* ------------------------------------------
+     BASIC STRUCTURE OBSERVATION
+  ------------------------------------------ */
 
-    if (data.length < 5) {
-      setText(elements.structure, "Waiting for sufficient candle data.");
+  function renderStructure() {
+    const series = getSeries(selectedTimeframe);
+
+    if (series.length < 12) {
+      setText(
+        elements.structure,
+        "Waiting for sufficient candle history."
+      );
       return;
     }
 
-    const recent = data.slice(-12);
+    const recent = series.slice(-12);
     const first = recent[0];
     const last = recent[recent.length - 1];
 
-    let message = "Structure is not yet classified.";
+    let message;
 
     if (last.close > first.close) {
-      message = "Recent price progression is upward. Watch for higher highs and higher lows.";
+      message =
+        "Recent price progression is upward. " +
+        "Observe possible higher highs and higher lows.";
     } else if (last.close < first.close) {
-      message = "Recent price progression is downward. Watch for lower highs and lower lows.";
+      message =
+        "Recent price progression is downward. " +
+        "Observe possible lower highs and lower lows.";
+    } else {
+      message =
+        "Recent price is relatively unchanged. " +
+        "Observe the next structural development.";
     }
 
     setText(elements.structure, message);
   }
 
+  /* ------------------------------------------
+     CANDLE CHART
+  ------------------------------------------ */
+
   function renderChart() {
     const canvas = elements.chart;
+
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
@@ -455,19 +683,23 @@ if (
     if (!rect.width || !rect.height) return;
 
     const ratio = window.devicePixelRatio || 1;
-    canvas.width = rect.width * ratio;
-    canvas.height = rect.height * ratio;
-    ctx.scale(ratio, ratio);
+
+    canvas.width = Math.floor(rect.width * ratio);
+    canvas.height = Math.floor(rect.height * ratio);
+
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 
     const width = rect.width;
     const height = rect.height;
 
     ctx.clearRect(0, 0, width, height);
 
-    const data = getAnalysisCandles().slice(-65);
+    const series = getSeries(selectedTimeframe);
+    const data = series.slice(-65);
 
     if (elements.empty) {
-      elements.empty.style.display = data.length ? "none" : "block";
+      elements.empty.style.display =
+        data.length >= 2 ? "none" : "block";
     }
 
     if (data.length < 2) return;
@@ -475,53 +707,70 @@ if (
     const highest = Math.max(...data.map(c => c.high));
     const lowest = Math.min(...data.map(c => c.low));
     const spread = highest - lowest || 1;
-    const padding = 15;
+
+    const padding = 18;
 
     const y = price =>
-      height - padding - ((price - lowest) / spread) *
+      height - padding -
+      ((price - lowest) / spread) *
       (height - padding * 2);
 
-    const candleWidth = Math.max(3, (width - 20) / data.length * 0.58);
-    const gap = (width - 20) / data.length;
-
-    // Grid
-    ctx.strokeStyle = "rgba(150,170,190,0.13)";
+    // Background grid
+    ctx.strokeStyle = "rgba(150,170,190,0.15)";
     ctx.lineWidth = 1;
 
     for (let i = 1; i <= 4; i++) {
-      const gy = (height / 5) * i;
+      const gy = height * i / 5;
+
       ctx.beginPath();
       ctx.moveTo(0, gy);
       ctx.lineTo(width, gy);
       ctx.stroke();
     }
 
-    // Zone overlays
-    detectedZones.forEach(zone => {
+    // Visible timeframe zones
+    const visibleZones = detectZones(
+      series,
+      selectedTimeframe
+    );
+
+    visibleZones.forEach(zone => {
       const top = y(zone.high);
       const bottom = y(zone.low);
 
       ctx.fillStyle = zone.type === "Demand"
-        ? "rgba(27,190,130,0.10)"
-        : "rgba(235,75,85,0.10)";
+        ? "rgba(35,197,142,0.12)"
+        : "rgba(239,89,101,0.12)";
 
-      ctx.fillRect(0, top, width, Math.max(2, bottom - top));
+      ctx.fillRect(
+        0,
+        top,
+        width,
+        Math.max(2, bottom - top)
+      );
     });
 
-    // Candles
+    // Candle drawing
+    const gap = (width - 20) / data.length;
+    const candleWidth = Math.max(2, gap * 0.58);
+
     data.forEach((candle, index) => {
       const x = 10 + index * gap + gap / 2;
       const bullish = candle.close >= candle.open;
 
-      ctx.strokeStyle = bullish ? "#23c58e" : "#ef5965";
-      ctx.fillStyle = bullish ? "#23c58e" : "#ef5965";
+      const candleColor = bullish ? "#23c58e" : "#ef5965";
+
+      ctx.strokeStyle = candleColor;
+      ctx.fillStyle = candleColor;
       ctx.lineWidth = 1.2;
 
+      // Wick
       ctx.beginPath();
       ctx.moveTo(x, y(candle.high));
       ctx.lineTo(x, y(candle.low));
       ctx.stroke();
 
+      // Body
       const top = y(Math.max(candle.open, candle.close));
       const bottom = y(Math.min(candle.open, candle.close));
 
@@ -534,65 +783,85 @@ if (
     });
   }
 
-  function renderAnalysis() {
-    analyseZones();
+  /* ------------------------------------------
+     RENDER EVERYTHING
+  ------------------------------------------ */
+
+  function renderEverything() {
+    const zones = collectAllZones();
+
     renderChart();
+    renderZoneSummary(zones);
+    renderZoneTable(zones);
+    renderLadder();
+    renderStructure();
+
+    if (elements.chartTitle) {
+      const tf = TIMEFRAMES.find(
+        item => item.id === selectedTimeframe
+      );
+
+      elements.chartTitle.textContent =
+        "Volatility 75 · " + (tf ? tf.label : selectedTimeframe);
+    }
   }
 
+  /* ------------------------------------------
+     USER CONTROLS
+  ------------------------------------------ */
+
   function refreshAnalysis() {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      requestCandles();
-    } else {
-      setStatus("Connect to Deriv before refreshing");
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setStatus("CONNECT BEFORE REFRESHING");
+      return;
     }
+
+    setStatus("REFRESHING MARKET HISTORY", true);
+    requestAllTimeframes();
   }
 
   function changeTimeframe(value) {
-    if (!TIMEFRAMES.some(tf => tf.value === value)) return;
+    if (!TIMEFRAMES.some(tf => tf.id === value)) return;
 
     selectedTimeframe = value;
-    renderLadder();
-
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      requestCandles();
-    } else {
-      renderAnalysis();
-    }
-  }
-
-  function manualConfirmation() {
-    const message =
-      "Manual review only. PFLS has not placed a trade. " +
-      "Check the chart, zone boundaries, risk and your own trade plan.";
-
-    alert(message);
+    renderEverything();
   }
 
   if (elements.connect) {
-    elements.connect.addEventListener("click", connectMarket);
+    elements.connect.addEventListener(
+      "click",
+      connectMarket
+    );
   }
 
   if (elements.refresh) {
-    elements.refresh.addEventListener("click", refreshAnalysis);
+    elements.refresh.addEventListener(
+      "click",
+      refreshAnalysis
+    );
   }
 
   if (elements.timeframe) {
-    selectedTimeframe = elements.timeframe.value || "1m";
-    elements.timeframe.addEventListener("change", event => {
-      changeTimeframe(event.target.value);
-    });
-  }
-
-  if (elements.confirm) {
-    elements.confirm.addEventListener("click", manualConfirmation);
+    elements.timeframe.addEventListener(
+      "change",
+      event => changeTimeframe(event.target.value)
+    );
   }
 
   window.addEventListener("resize", renderChart);
 
-  // Initial screen
-  setStatus("Not connected — tap Connect");
-  renderLadder();
-  renderChart();
+  /* ------------------------------------------
+     INITIAL SCREEN
+  ------------------------------------------ */
 
-  console.log("PFLS Trader prototype loaded for", SYMBOL);
+  setStatus("DISCONNECTED");
+  renderEverything();
+
+  console.log(
+    "PFLS Trader loaded. Market:",
+    SYMBOL,
+    "| Timeframes:",
+    TIMEFRAMES.length
+  );
+
 })();
