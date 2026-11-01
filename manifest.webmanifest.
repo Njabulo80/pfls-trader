@@ -1,0 +1,19 @@
+{
+  "name": "PFLS Trader",
+  "short_name": "PFLS Trader",
+  "description": "Price Flow Ladder Sequence trading analysis dashboard",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#08111f",
+  "theme_color": "#08111f",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
