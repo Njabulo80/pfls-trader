@@ -1,0 +1,18 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="110" fill="#08111f"/>
+  <path d="M85 370 L256 90 L427 370 Z"
+        fill="none" stroke="#23c58e" stroke-width="18"/>
+  <path d="M145 330 L195 330 L195 270 L145 270 Z"
+        fill="#23c58e"/>
+  <path d="M230 330 L280 330 L280 195 L230 195 Z"
+        fill="#ef5965"/>
+  <path d="M315 330 L365 330 L365 235 L315 235 Z"
+        fill="#23c58e"/>
+  <path d="M256 90 L256 370"
+        stroke="#ffffff" stroke-opacity=".25" stroke-width="5"
+        stroke-dasharray="10 12"/>
+  <text x="256" y="425" font-family="Arial, sans-serif"
+        font-size="42" font-weight="bold" text-anchor="middle"
+        fill="#ffffff">PFLS</text>
+</svg>
