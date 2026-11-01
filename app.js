@@ -38,22 +38,24 @@
     return null;
   };
 
-  const elements = {
-    connect: find("connectBtn", "connectMarket", "connect"),
-    refresh: find("refreshBtn", "refreshAnalysis", "refresh"),
-    timeframe: find("timeframeSelect", "timeframe", "chartTimeframe"),
-    status: find("connectionStatus", "connection-status", "status"),
-    chart: find("chart", "priceChart"),
-    empty: find("emptyState", "chartEmpty", "empty-state"),
-    price: find("currentPrice", "marketPrice", "price"),
-    demand: find("nearestDemand", "demandValue", "demand"),
-    supply: find("nearestSupply", "supplyValue", "supply"),
-    opposing: find("nextOpposing", "opposingZone"),
-    ladder: find("tfGrid", "timeframeLadder", "ladder"),
-    zones: find("zonesBody", "zonesTableBody", "zones"),
-    structure: find("structureText", "marketStructure", "structure"),
-    confirm: find("confirmBtn", "manualConfirm", "confirmTrade")
-  };
+  
+const elements = {
+  connect: find("connectBtn"),
+  refresh: find("refreshBtn"),
+  timeframe: find("chartTf"),
+  status: find("connection"),
+  chart: find("chart"),
+  empty: find("chartEmpty"),
+  price: find("price"),
+  demand: find("nearestDemand"),
+  supply: find("nearestSupply"),
+  opposing: find("nextTarget"),
+  ladder: find("tfGrid"),
+  zones: find("zoneRows"),
+  structure: find("structure"),
+  confirm: null
+};
+
 
   let socket = null;
   let candles = [];
