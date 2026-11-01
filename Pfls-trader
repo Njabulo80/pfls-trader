@@ -1,0 +1,179 @@
+index.html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080d18">
+  <meta name="description" content="PFLS Trader - Price Flow Ladder Sequence">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+  <title>PFLS Trader</title>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">P</div>
+    <div><b>PFLS <span>TRADER</span></b>
+    <small>PRICE FLOW LADDER SEQUENCE</small></div>
+  </div>
+  <div class="top-actions">
+    <span id="connection" class="status offline">● DISCONNECTED</span>
+    <button id="connectBtn" class="btn primary">Connect market</button>
+  </div>
+</header>
+
+<main class="shell">
+  <section class="hero">
+    <div>
+      <div class="eyebrow">MARKET INTELLIGENCE / SYNTHETIC INDICES</div>
+      <h1>Read the <em>flow.</em><br>Respect the sequence.</h1>
+      <p>Multi-timeframe supply and demand research for Volatility 75.</p>
+    </div>
+    <div class="hero-stat">
+      <small>LIVE MARKET PRICE</small>
+      <strong id="price">—</strong>
+      <span id="priceChange">Waiting for market data</span>
+    </div>
+  </section>
+
+  <section class="toolbar panel">
+    <div class="field">
+      <label>MARKET</label>
+      <select id="symbol">
+        <option value="R_75">Volatility 75 Index</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>CHART TIMEFRAME</label>
+      <select id="chartTf">
+        <option value="1m">1 minute</option>
+        <option value="5m">5 minutes</option>
+        <option value="15m">15 minutes</option>
+        <option value="30m">30 minutes</option>
+        <option value="1h">1 hour</option>
+        <option value="4h">4 hours</option>
+        <option value="1d">1 day</option>
+        <option value="1w">1 week</option>
+      </select>
+    </div>
+    <button id="refreshBtn" class="btn secondary">Refresh analysis</button>
+  </section>
+
+  <section class="grid-main">
+    <div class="panel chart-panel">
+      <div class="panel-head">
+        <div><div class="eyebrow">PRICE STRUCTURE</div>
+        <h2 id="chartTitle">Volatility 75 · 1 minute</h2></div>
+        <span class="live-tag">● MARKET VIEW</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div id="chartEmpty" class="chart-empty">
+          Connect to Deriv to load live market candles.
+        </div>
+      </div>
+      <div class="chart-legend">
+        <span>🟢 Bullish</span><span>🔴 Bearish</span>
+        <span>🟢 Demand</span><span>🔴 Supply</span>
+      </div>
+    </div>
+
+    <div class="side-stack">
+      <div class="panel insight-card">
+        <div class="eyebrow">PFLS NEAREST DEMAND</div>
+        <div class="zone-price" id="nearestDemand">—</div>
+        <div id="demandMeta" class="muted">Awaiting zones</div>
+        <div class="zone-line demand-line"></div>
+      </div>
+      <div class="panel insight-card">
+        <div class="eyebrow">PFLS NEAREST SUPPLY</div>
+        <div class="zone-price" id="nearestSupply">—</div>
+        <div id="supplyMeta" class="muted">Awaiting zones</div>
+        <div class="zone-line supply-line"></div>
+      </div>
+      <div class="panel target-card">
+        <div class="eyebrow">NEXT OPPOSING ZONE</div>
+        <h3 id="nextTarget">Not determined</h3>
+        <p id="targetMeta" class="muted">Waiting for analysis.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div><div class="eyebrow">TIMEFRAME LADDER</div>
+      <h2>Top-down structure map</h2></div>
+      <span class="muted">All 8 timeframes</span>
+    </div>
+    <div class="tf-grid" id="tfGrid">
+      <div class="tf-card"><b>1W</b><span>—</span><small>Not loaded</small></div>
+      <div class="tf-card"><b>1D</b><span>—</span><small>Not loaded</small></div>
+      <div class="tf-card"><b>4H</b><span>—</span><small>Not loaded</small></div>
+      <div class="tf-card"><b>1H</b><span>—</span><small>Not loaded</small></div>
+      <div class="tf-card"><b>30M</b><span>—</span><small>Not loaded</small></div>
+      <div class="tf-card"><b>15M</b><span>—</span><small>Not loaded</small></div>
+      <div class="tf-card"><b>5M</b><span>—</span><small>Not loaded</small></div>
+      <div class="tf-card"><b>1M</b><span>—</span><small>Not loaded</small></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div><div class="eyebrow">AUTOMATIC ZONE DETECTION</div>
+      <h2>Nearest relevant zones</h2></div>
+      <span id="zoneCount" class="count">0 zones</span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th>TYPE</th><th>TIMEFRAME</th><th>ZONE RANGE</th>
+          <th>DISTANCE</th><th>STATUS</th><th>QUALITY</th>
+        </tr></thead>
+        <tbody id="zoneRows">
+          <tr><td colspan="6" class="empty-row">
+            Connect to Deriv to begin analysis.
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">
+      PFLS ranks candidate zones by proximity. A nearby zone does not
+      guarantee a reaction. Detection is a research heuristic that
+      requires testing and validation.
+    </p>
+  </section>
+
+  <section class="grid-bottom">
+    <div class="panel">
+      <div class="eyebrow">STRUCTURE OBSERVATION</div>
+      <h2>Market context</h2>
+      <div id="structure" class="structure">
+        Waiting for candle history.
+      </div>
+    </div>
+    <div class="panel manual">
+      <div class="eyebrow">EXECUTION POLICY</div>
+      <h2>Manual confirmation only</h2>
+      <p>PFLS Trader identifies research candidates. It will not place,
+      modify or close trades.</p>
+      <div class="safe-label">● AUTOMATED ANALYSIS · MANUAL DECISION</div>
+    </div>
+  </section>
+  <footer>
+    <span>PFLS TRADER · RESEARCH BUILD</span>
+    <span>Deriv public market data · No trading permissions</span>
+  </footer>
+</main>
+
+<div id="toast" class="toast" role="status"></div>
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () =>
+    navigator.serviceWorker.register('./sw.js').catch(()=>{})
+  );
+}
+</script>
+</body>
+</html>
