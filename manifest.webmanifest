@@ -7,10 +7,19 @@
   "start_url": "/pfls-trader/",
   "scope": "/pfls-trader/",
   "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "orientation": "portrait",
   "background_color": "#080d18",
   "theme_color": "#080d18",
   "lang": "en",
+  "categories": [
+    "finance",
+    "education",
+    "productivity"
+  ],
   "icons": [
     {
       "src": "icon-192.png",
