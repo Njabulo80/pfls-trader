@@ -28,10 +28,9 @@
   "screenshots": [
     {
       "src": "screenshot-mobile.png",
-      "sizes": "1080x1920",
-      "type": "image/png",
+      "type": "image/jpeg",
       "form_factor": "narrow",
-      "label": "PFLS Trader mobile dashboard"
+      "label": "PFLS Trader mobile showcase"
     }
   ]
 }
