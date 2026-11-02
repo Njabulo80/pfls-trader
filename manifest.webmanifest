@@ -1,17 +1,19 @@
 {
+  "id": "/pfls-trader/",
   "name": "PFLS Trader",
-  "short_name": "PFLS Trader",
-  "description": "Price Flow Ladder Sequence trading analysis dashboard",
-  "start_url": "./",
-  "scope": "./",
+  "short_name": "PFLS",
+  "description": "Price Flow Ladder Sequence market analysis for Deriv Volatility 75.",
+  "start_url": "/pfls-trader/",
+  "scope": "/pfls-trader/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#08111f",
-  "theme_color": "#08111f",
+  "background_color": "#080d18",
+  "theme_color": "#080d18",
+  "lang": "en",
   "icons": [
     {
-      "src": "./icon.svg",
-      "sizes": "any",
+      "src": "icon.svg",
+      "sizes": "192x192 512x512",
       "type": "image/svg+xml",
       "purpose": "any"
     }
