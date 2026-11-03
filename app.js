@@ -1,6 +1,6 @@
 
 /* ==========================================
-   PFLS TRADER v1.40
+   PFLS TRADER v1.41
    Price Flow Ladder Sequence
 
    Market: Deriv Volatility 75
@@ -15,6 +15,7 @@
    - Multi-timeframe zone confluence
    - Confirmed HH/HL and LH/LL observations
    - Lower dashboard intelligence
+   - Market Context timeframe synchronisation
    - No automatic trade execution
 ========================================== */
 
@@ -1170,10 +1171,22 @@
 
   /* ==========================================
      MARKET CONTEXT PANEL
+     v1.41 TIMEFRAME SYNCHRONISATION
   ========================================== */
 
   function renderStructure(zones) {
-    const timeframe = selectedStructureTimeframe;
+    const dropdownValue = elements.structureTf
+      ? elements.structureTf.value
+      : selectedStructureTimeframe;
+
+    const timeframe = TIMEFRAMES.some(
+      tf => tf.id === dropdownValue
+    )
+      ? dropdownValue
+      : "1m";
+
+    selectedStructureTimeframe = timeframe;
+
     const result = analyseStructure(timeframe);
 
     setText(
@@ -1480,6 +1493,10 @@
 
     selectedStructureTimeframe = value;
 
+    if (elements.structureTf) {
+      elements.structureTf.value = value;
+    }
+
     renderStructure(latestZones);
   }
 
@@ -1556,6 +1573,14 @@
   );
 
   /* ==========================================
+     PAGE RESTORATION SYNCHRONISATION
+  ========================================== */
+
+  window.addEventListener("pageshow", () => {
+    renderStructure(latestZones);
+  });
+
+  /* ==========================================
      INITIAL SCREEN
   ========================================== */
 
@@ -1569,7 +1594,7 @@
   renderEverything();
 
   console.log(
-    "PFLS Trader v1.40 loaded.",
+    "PFLS Trader v1.41 loaded.",
     "Market:", SYMBOL,
     "| Timeframes:", TIMEFRAMES.length,
     "| Mode: READ ONLY",
