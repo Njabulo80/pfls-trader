@@ -7,8 +7,9 @@
 
 // =====================================================
 // PFLS TRADER - EXECUTION MODULE
-// Version 1.50
+// Version 1.60
 // TICK-BASED M5 REJECTION + BREAKOUT
+// EXPLICIT PENDING SIGNAL MONITORING
 // =====================================================
 
 // -----------------------------------------------------
@@ -89,6 +90,30 @@ void PFLS_ExecutionResetPending()
 }
 
 // =====================================================
+// CHECK FOR ACTIVE PENDING SIGNAL
+// Used by Engine v1.70.
+// =====================================================
+
+bool PFLS_ExecutionHasPendingSignal()
+{
+   if(PFLS_PendingRejectionTime <= 0)
+      return false;
+
+   if(PFLS_PendingBuy == PFLS_PendingSell)
+      return false;
+
+   if(PFLS_PendingRejectionHigh <=
+      PFLS_PendingRejectionLow)
+      return false;
+
+   if(!PFLS_PendingEntryZone.valid ||
+      PFLS_PendingEntryZone.invalidated)
+      return false;
+
+   return true;
+}
+
+// =====================================================
 // CONSUME CONFIRMED SIGNAL
 // Called by Engine after its decision.
 // =====================================================
@@ -147,9 +172,8 @@ bool PFLS_ExecutionIsBearishRejection(MqlRates &candle)
 // =====================================================
 // M5 SIGNAL ENGINE
 //
-// Detects a rejection at a valid M5 zone.
-// Requires a breakout during the immediately
-// following M5 candle.
+// Detects rejection at a valid M5 zone.
+// Requires breakout during immediately following M5 bar.
 // =====================================================
 
 bool PFLS_ExecutionGetM5Signal(
@@ -162,6 +186,7 @@ bool PFLS_ExecutionGetM5Signal(
 {
    isBuy = false;
    signalBarTime = 0;
+
    PFLSZ_Reset(entryZone);
 
    datetime currentBarOpen = iTime(
@@ -185,6 +210,7 @@ bool PFLS_ExecutionGetM5Signal(
       datetime expectedBreakoutBar =
          PFLS_PendingRejectionTime + periodSeconds;
 
+      // Expire after the immediate next M5 candle.
       if(currentBarOpen > expectedBreakoutBar)
       {
          Print("PFLS: Pending M5 rejection expired.");
@@ -197,6 +223,7 @@ bool PFLS_ExecutionGetM5Signal(
          return false;
       }
 
+      // Wait until the exact next M5 candle.
       if(currentBarOpen != expectedBreakoutBar)
          return false;
 
@@ -204,6 +231,13 @@ bool PFLS_ExecutionGetM5Signal(
 
       if(!SymbolInfoTick(_Symbol, tick))
          return false;
+
+      if(tick.bid <= 0.0 || tick.ask <= 0.0)
+         return false;
+
+      // ------------------------------------------------
+      // BREAKOUT CONFIRMATION
+      // ------------------------------------------------
 
       if(!PFLS_PendingBreakoutConfirmed)
       {
@@ -502,10 +536,6 @@ bool PFLS_ExecutionPermissions()
 
 // =====================================================
 // MAIN EXECUTION FUNCTION
-//
-// A failed pre-check does not mark the signal as
-// executed. Engine consumes the signal after its
-// one permitted execution decision.
 // =====================================================
 
 bool PFLS_ExecutionTryTrade(
@@ -777,7 +807,7 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // Mark before submission to prevent duplicate requests.
+   // Prevent duplicate submissions for this signal.
    PFLS_LastExecutionBar = signalBarTime;
 
    bool submitted = false;
