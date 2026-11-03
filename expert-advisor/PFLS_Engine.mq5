@@ -1,7 +1,7 @@
 
 #property strict
-#property version "1.80"
-#property description "PFLS Trader - Multi-Timeframe Structure Confluence and Tick Execution Engine"
+#property version "1.81"
+#property description "PFLS Trader - Multi-Timeframe Structure Confluence and Controlled Retry Engine"
 
 #include "PFLS_Zones.mqh"
 #include "PFLS_Execution.mqh"
@@ -178,7 +178,7 @@ void ScanMarket()
    PFLS_LastScanTime = TimeCurrent();
 
    Print(
-      "PFLS v1.80 SCAN | Symbol: ",
+      "PFLS v1.81 SCAN | Symbol: ",
       _Symbol,
       " | Price: ",
       DoubleToString(currentPrice, _Digits),
@@ -396,7 +396,7 @@ void PFLS_ProcessEntry()
    }
 
    // --------------------------------------------------
-   // TRADE EXECUTION
+   // TRADE EXECUTION AND RETRY HANDLING
    // --------------------------------------------------
 
    bool tradeDecision = PFLS_ExecutionTryTrade(
@@ -407,11 +407,21 @@ void PFLS_ProcessEntry()
    );
 
    if(tradeDecision)
-      Print("PFLS: Trade request accepted.");
-   else
-      Print("PFLS: Trade conditions not satisfied.");
+   {
+      Print("PFLS: Trade request accepted. Consuming signal.");
 
-   PFLS_ExecutionConsumeSignal(signalTime);
+      PFLS_ExecutionConsumeSignal(signalTime);
+   }
+   else
+   {
+      Print(
+         "PFLS: Trade not accepted. "
+         "Pending signal retained for controlled retry."
+      );
+
+      // Do not consume the signal here.
+      // Execution module controls retry timing.
+   }
 }
 
 // =====================================================
@@ -439,12 +449,13 @@ int OnInit()
    }
 
    Print("======================================");
-   Print("PFLS TRADER ENGINE v1.80");
+   Print("PFLS TRADER ENGINE v1.81");
    Print("Symbol: ", _Symbol);
    Print("Timeframes: 8");
    Print("Structure timeframes: 5");
    Print("Minimum structure votes: ", MinimumHTFVotes);
    Print("Execution enabled: ", PFLS_EnableExecution);
+   Print("Controlled retry handling: ACTIVE");
    Print("======================================");
 
    ScanMarket();
@@ -479,7 +490,7 @@ void OnDeinit(const int reason)
    EventKillTimer();
 
    Print(
-      "PFLS ENGINE v1.80 stopped. Reason: ",
+      "PFLS ENGINE v1.81 stopped. Reason: ",
       reason
    );
 }
