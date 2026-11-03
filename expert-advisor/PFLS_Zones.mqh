@@ -2,21 +2,28 @@
 #ifndef PFLS_ZONES_MQH
 #define PFLS_ZONES_MQH
 
-// ============================================
-// PFLS TRADER - ZONE DETECTION MODULE
-// ============================================
+// =====================================================
+// PFLS TRADER
+// PRICE FLOW LADDER SEQUENCE
+// ZONE DETECTION MODULE
+// Version 1.20
+// =====================================================
 
-// Zone interaction states
+// -----------------------------------------------------
+// ZONE INTERACTION STATES
+// -----------------------------------------------------
+
 enum ENUM_PFLS_ZONE_STATE
 {
    PFLS_ZONE_APPROACHING,
    PFLS_ZONE_INSIDE,
-   PFLS_ZONE_DEPARTED
+   PFLS_ZONE_DEPARTED,
+   PFLS_ZONE_UNTESTED
 };
 
-// ============================================
+// -----------------------------------------------------
 // ZONE RECORD
-// ============================================
+// -----------------------------------------------------
 
 struct PFLSZoneRecord
 {
@@ -29,38 +36,44 @@ struct PFLSZoneRecord
    double upper;
 
    ENUM_TIMEFRAMES timeframe;
+
    datetime formedAt;
 
    int touches;
+
    bool invalidated;
+
    double distancePoints;
 };
 
-// ============================================
-// RESET ZONE RECORD
-// ============================================
+// -----------------------------------------------------
+// RESET ZONE
+// -----------------------------------------------------
 
 void PFLSZ_Reset(PFLSZoneRecord &zone)
 {
-   zone.valid = false;
-   zone.isDemand = false;
+   zone.valid          = false;
+   zone.isDemand       = false;
+   zone.zoneState      = PFLS_ZONE_UNTESTED;
 
-   zone.zoneState = PFLS_ZONE_APPROACHING;
+   zone.lower          = 0.0;
+   zone.upper          = 0.0;
 
-   zone.lower = 0.0;
-   zone.upper = 0.0;
+   zone.timeframe      = PERIOD_CURRENT;
 
-   zone.timeframe = PERIOD_CURRENT;
-   zone.formedAt = 0;
+   zone.formedAt       = 0;
 
-   zone.touches = 0;
-   zone.invalidated = false;
+   zone.touches        = 0;
+
+   zone.invalidated    = false;
+
    zone.distancePoints = 0.0;
 }
 
-// ============================================
+// -----------------------------------------------------
 // CHECK PIVOT LOW
-// ============================================
+// Uses confirmed closed candles only.
+// -----------------------------------------------------
 
 bool PFLSZ_IsPivotLow(
    MqlRates &rates[],
@@ -69,26 +82,35 @@ bool PFLSZ_IsPivotLow(
    int strength
 )
 {
-   if(index < strength || index + strength >= total)
+   if(strength < 1)
       return false;
 
-   double pivot = rates[index].low;
+   if(index < strength)
+      return false;
+
+   if(index + strength >= total)
+      return false;
+
+   double pivotLow = rates[index].low;
+
+   if(pivotLow <= 0.0)
+      return false;
 
    for(int k = 1; k <= strength; k++)
    {
-      if(rates[index-k].low <= pivot)
+      if(rates[index-k].low <= pivotLow)
          return false;
 
-      if(rates[index+k].low <= pivot)
+      if(rates[index+k].low <= pivotLow)
          return false;
    }
 
    return true;
 }
 
-// ============================================
+// -----------------------------------------------------
 // CHECK PIVOT HIGH
-// ============================================
+// -----------------------------------------------------
 
 bool PFLSZ_IsPivotHigh(
    MqlRates &rates[],
@@ -97,27 +119,44 @@ bool PFLSZ_IsPivotHigh(
    int strength
 )
 {
-   if(index < strength || index + strength >= total)
+   if(strength < 1)
       return false;
 
-   double pivot = rates[index].high;
+   if(index < strength)
+      return false;
+
+   if(index + strength >= total)
+      return false;
+
+   double pivotHigh = rates[index].high;
+
+   if(pivotHigh <= 0.0)
+      return false;
 
    for(int k = 1; k <= strength; k++)
    {
-      if(rates[index-k].high >= pivot)
+      if(rates[index-k].high >= pivotHigh)
          return false;
 
-      if(rates[index+k].high >= pivot)
+      if(rates[index+k].high >= pivotHigh)
          return false;
    }
 
    return true;
 }
 
-// ============================================
+// -----------------------------------------------------
 // CHECK ZONE HISTORY
-// Count distinct visits and detect invalidation.
-// ============================================
+//
+// Counts separate visits to a zone.
+// Invalidates demand after a closed candle closes
+// below its lower boundary.
+// Invalidates supply after a closed candle closes
+// above its upper boundary.
+//
+// rates[] is expected to be a series array:
+// index 0 = most recent completed candle.
+// -----------------------------------------------------
 
 void PFLSZ_CheckZoneHistory(
    MqlRates &rates[],
@@ -125,54 +164,69 @@ void PFLSZ_CheckZoneHistory(
    PFLSZoneRecord &zone
 )
 {
-   zone.touches = 0;
+   zone.touches     = 0;
    zone.invalidated = false;
 
-   bool wasInsideZone = false;
+   int total = ArraySize(rates);
 
-   for(int j = pivotIndex - 1; j >= 0; j--)
+   if(total <= 0)
+      return;
+
+   if(pivotIndex <= 0 || pivotIndex >= total)
+      return;
+
+   bool wasInside = false;
+
+   // Examine candles newer than the pivot candle.
+   for(int i = pivotIndex - 1; i >= 0; i--)
    {
       bool overlaps =
-         rates[j].high >= zone.lower &&
-         rates[j].low <= zone.upper;
+         rates[i].high >= zone.lower &&
+         rates[i].low  <= zone.upper;
 
-      // Demand invalidation
-      if(zone.isDemand && rates[j].close < zone.lower)
-      {
-         zone.invalidated = true;
-         return;
-      }
-
-      // Supply invalidation
-      if(!zone.isDemand && rates[j].close > zone.upper)
-      {
-         zone.invalidated = true;
-         return;
-      }
-
-      // Count distinct entries
-      if(overlaps && !wasInsideZone)
-      {
+      // Count a new interaction only when price
+      // enters after being outside the zone.
+      if(overlaps && !wasInside)
          zone.touches++;
+
+      wasInside = overlaps;
+
+      // Demand invalidation.
+      if(zone.isDemand &&
+         rates[i].close < zone.lower)
+      {
+         zone.invalidated = true;
+         return;
       }
 
-      wasInsideZone = overlaps;
+      // Supply invalidation.
+      if(!zone.isDemand &&
+         rates[i].close > zone.upper)
+      {
+         zone.invalidated = true;
+         return;
+      }
    }
 }
 
-// ============================================
-// UPDATE CURRENT ZONE STATE
-// ============================================
+// -----------------------------------------------------
+// UPDATE ZONE STATE
+// -----------------------------------------------------
 
 void PFLSZ_UpdateZoneState(
    PFLSZoneRecord &zone,
    double currentPrice
 )
 {
-   if(!zone.valid || currentPrice <= 0.0)
+   if(!zone.valid ||
+      zone.invalidated ||
+      currentPrice <= 0.0)
+   {
+      zone.zoneState = PFLS_ZONE_UNTESTED;
       return;
+   }
 
-   // Price currently inside the zone
+   // Price is currently inside the zone.
    if(currentPrice >= zone.lower &&
       currentPrice <= zone.upper)
    {
@@ -180,55 +234,72 @@ void PFLSZ_UpdateZoneState(
       return;
    }
 
-   // Price is below a demand zone
-   // or above a supply zone.
-   if((zone.isDemand && currentPrice < zone.lower) ||
-      (!zone.isDemand && currentPrice > zone.upper))
+   // Zone has never been visited.
+   if(zone.touches <= 0)
    {
-      zone.zoneState = PFLS_ZONE_APPROACHING;
+      zone.zoneState = PFLS_ZONE_UNTESTED;
       return;
    }
 
-   // Price has moved beyond the opposite
-   // boundary after interacting with the zone.
-   zone.zoneState = PFLS_ZONE_DEPARTED;
+   // Demand zone.
+   if(zone.isDemand)
+   {
+      if(currentPrice < zone.lower)
+         zone.zoneState = PFLS_ZONE_APPROACHING;
+      else
+         zone.zoneState = PFLS_ZONE_DEPARTED;
+
+      return;
+   }
+
+   // Supply zone.
+   if(!zone.isDemand)
+   {
+      if(currentPrice > zone.upper)
+         zone.zoneState = PFLS_ZONE_APPROACHING;
+      else
+         zone.zoneState = PFLS_ZONE_DEPARTED;
+
+      return;
+   }
 }
 
-// ============================================
-// DETECT NEAREST DEMAND AND SUPPLY ZONES
-// ============================================
+// -----------------------------------------------------
+// DETECT NEAREST VALID DEMAND AND SUPPLY ZONES
+//
+// CopyRates starts at position 1.
+// Therefore the currently forming candle is excluded.
+//
+// Only confirmed pivots are considered.
+// -----------------------------------------------------
 
 bool PFLSZ_DetectNearestZones(
    string symbol,
    ENUM_TIMEFRAMES timeframe,
-   double currentPrice,
    int lookback,
    int strength,
-   PFLSZoneRecord &demand,
-   PFLSZoneRecord &supply
+   double currentPrice,
+   PFLSZoneRecord &nearestDemand,
+   PFLSZoneRecord &nearestSupply
 )
 {
-   PFLSZ_Reset(demand);
-   PFLSZ_Reset(supply);
+   PFLSZ_Reset(nearestDemand);
+   PFLSZ_Reset(nearestSupply);
 
-   if(lookback < 20 ||
-      strength < 1 ||
-      currentPrice <= 0.0)
-   {
+   if(lookback < 20)
       return false;
-   }
 
-   // Validate instrument point size
-   double pointSize = SymbolInfoDouble(
-      symbol,
-      SYMBOL_POINT
-   );
+   if(strength < 1)
+      return false;
+
+   if(currentPrice <= 0.0)
+      return false;
+
+   double pointSize =
+      SymbolInfoDouble(symbol, SYMBOL_POINT);
 
    if(pointSize <= 0.0)
-   {
-      Print("PFLS: Invalid symbol point size.");
       return false;
-   }
 
    MqlRates rates[];
 
@@ -242,176 +313,205 @@ bool PFLSZ_DetectNearestZones(
       rates
    );
 
-   if(copied < (strength * 2 + 5))
-   {
-      Print("PFLS: Insufficient historical price data.");
+   if(copied < strength * 2 + 5)
       return false;
-   }
 
-   double nearestDemandDistance = DBL_MAX;
-   double nearestSupplyDistance = DBL_MAX;
+   // --------------------------------------------------
+   // SCAN CONFIRMED PIVOTS
+   // --------------------------------------------------
 
-   // ==========================================
-   // SCAN HISTORICAL CANDLES
-   // ==========================================
-
-   for(int i = strength; i < copied - strength; i++)
+   for(int i = strength;
+       i < copied - strength;
+       i++)
    {
-      // ----------------------------------------
+      // ==============================================
       // DEMAND ZONE
-      // ----------------------------------------
+      // ==============================================
 
-      if(PFLSZ_IsPivotLow(rates, i, copied, strength))
+      if(PFLSZ_IsPivotLow(
+         rates,
+         i,
+         copied,
+         strength
+      ))
       {
          PFLSZoneRecord candidate;
+
          PFLSZ_Reset(candidate);
 
-         candidate.isDemand = true;
+         candidate.valid     = true;
+         candidate.isDemand  = true;
 
-         candidate.lower = rates[i].low;
+         candidate.lower     = rates[i].low;
 
-         candidate.upper = MathMax(
-            rates[i].open,
-            rates[i].close
-         );
-
-         candidate.timeframe = timeframe;
-         candidate.formedAt = rates[i].time;
-
-         PFLSZ_CheckZoneHistory(
-            rates,
-            i,
-            candidate
-         );
-
-         candidate.valid =
-            !candidate.invalidated &&
-            candidate.upper < currentPrice;
-
-         // Also recognise demand zones
-         // when current price is inside them.
-         if(!candidate.invalidated &&
-            currentPrice >= candidate.lower &&
-            currentPrice <= candidate.upper)
-         {
-            candidate.valid = true;
-         }
-
-         if(candidate.valid)
-         {
-            candidate.distancePoints =
-               MathAbs(currentPrice - candidate.upper) /
-               pointSize;
-
-            PFLSZ_UpdateZoneState(
-               candidate,
-               currentPrice
+         candidate.upper     =
+            MathMax(
+               rates[i].open,
+               rates[i].close
             );
 
-            if(candidate.distancePoints < nearestDemandDistance)
+         candidate.timeframe = timeframe;
+
+         candidate.formedAt  = rates[i].time;
+
+         if(candidate.upper > candidate.lower)
+         {
+            PFLSZ_CheckZoneHistory(
+               rates,
+               i,
+               candidate
+            );
+
+            if(!candidate.invalidated)
             {
-               nearestDemandDistance = candidate.distancePoints;
-               demand = candidate;
+               bool priceRelevant =
+                  candidate.upper < currentPrice ||
+                  (
+                     currentPrice >= candidate.lower &&
+                     currentPrice <= candidate.upper
+                  );
+
+               if(priceRelevant)
+               {
+                  candidate.distancePoints =
+                     MathAbs(
+                        currentPrice - candidate.upper
+                     ) / pointSize;
+
+                  PFLSZ_UpdateZoneState(
+                     candidate,
+                     currentPrice
+                  );
+
+                  if(!nearestDemand.valid ||
+                     candidate.distancePoints <
+                     nearestDemand.distancePoints)
+                  {
+                     nearestDemand = candidate;
+                  }
+               }
             }
          }
       }
 
-      // ----------------------------------------
+      // ==============================================
       // SUPPLY ZONE
-      // ----------------------------------------
+      // ==============================================
 
-      if(PFLSZ_IsPivotHigh(rates, i, copied, strength))
+      if(PFLSZ_IsPivotHigh(
+         rates,
+         i,
+         copied,
+         strength
+      ))
       {
          PFLSZoneRecord candidate;
+
          PFLSZ_Reset(candidate);
 
-         candidate.isDemand = false;
+         candidate.valid     = true;
+         candidate.isDemand  = false;
 
-         candidate.lower = MathMin(
-            rates[i].open,
-            rates[i].close
-         );
-
-         candidate.upper = rates[i].high;
-
-         candidate.timeframe = timeframe;
-         candidate.formedAt = rates[i].time;
-
-         PFLSZ_CheckZoneHistory(
-            rates,
-            i,
-            candidate
-         );
-
-         candidate.valid =
-            !candidate.invalidated &&
-            candidate.lower > currentPrice;
-
-         // Also recognise supply zones
-         // when current price is inside them.
-         if(!candidate.invalidated &&
-            currentPrice >= candidate.lower &&
-            currentPrice <= candidate.upper)
-         {
-            candidate.valid = true;
-         }
-
-         if(candidate.valid)
-         {
-            candidate.distancePoints =
-               MathAbs(currentPrice - candidate.lower) /
-               pointSize;
-
-            PFLSZ_UpdateZoneState(
-               candidate,
-               currentPrice
+         candidate.lower     =
+            MathMin(
+               rates[i].open,
+               rates[i].close
             );
 
-            if(candidate.distancePoints < nearestSupplyDistance)
+         candidate.upper     = rates[i].high;
+
+         candidate.timeframe = timeframe;
+
+         candidate.formedAt  = rates[i].time;
+
+         if(candidate.upper > candidate.lower)
+         {
+            PFLSZ_CheckZoneHistory(
+               rates,
+               i,
+               candidate
+            );
+
+            if(!candidate.invalidated)
             {
-               nearestSupplyDistance = candidate.distancePoints;
-               supply = candidate;
+               bool priceRelevant =
+                  candidate.lower > currentPrice ||
+                  (
+                     currentPrice >= candidate.lower &&
+                     currentPrice <= candidate.upper
+                  );
+
+               if(priceRelevant)
+               {
+                  candidate.distancePoints =
+                     MathAbs(
+                        candidate.lower - currentPrice
+                     ) / pointSize;
+
+                  PFLSZ_UpdateZoneState(
+                     candidate,
+                     currentPrice
+                  );
+
+                  if(!nearestSupply.valid ||
+                     candidate.distancePoints <
+                     nearestSupply.distancePoints)
+                  {
+                     nearestSupply = candidate;
+                  }
+               }
             }
          }
       }
    }
-
-   return demand.valid || supply.valid;
-}
-
-// ============================================
-// MULTI-TIMEFRAME ZONE OVERLAP
-// MTZC BUILDING BLOCK
-// ============================================
-
-bool PFLSZ_ZonesOverlap(
-   PFLSZoneRecord &first,
-   PFLSZoneRecord &second
-)
-{
-   if(!first.valid || !second.valid)
-      return false;
-
-   if(first.isDemand != second.isDemand)
-      return false;
 
    return (
-      first.lower <= second.upper &&
-      second.lower <= first.upper
+      nearestDemand.valid ||
+      nearestSupply.valid
    );
 }
 
-// ============================================
-// ZONE FRESHNESS HEURISTIC
-// NOT A PROBABILITY OF SUCCESS
-// ============================================
+// -----------------------------------------------------
+// CHECK ZONE OVERLAP
+// -----------------------------------------------------
 
-double PFLSZ_FreshnessScore(PFLSZoneRecord &zone)
+bool PFLSZ_ZonesOverlap(
+   PFLSZoneRecord &zoneA,
+   PFLSZoneRecord &zoneB
+)
+{
+   if(!zoneA.valid || !zoneB.valid)
+      return false;
+
+   if(zoneA.invalidated || zoneB.invalidated)
+      return false;
+
+   if(zoneA.isDemand != zoneB.isDemand)
+      return false;
+
+   return (
+      zoneA.lower <= zoneB.upper &&
+      zoneA.upper >= zoneB.lower
+   );
+}
+
+// -----------------------------------------------------
+// FRESHNESS SCORE
+//
+// This is a heuristic ranking score.
+// It is NOT a probability of winning.
+// -----------------------------------------------------
+
+double PFLSZ_FreshnessScore(
+   PFLSZoneRecord &zone
+)
 {
    if(!zone.valid || zone.invalidated)
       return 0.0;
 
-   double score = 100.0 - (zone.touches * 15.0);
+   double score = 100.0;
+
+   score -= zone.touches * 15.0;
 
    if(score < 0.0)
       score = 0.0;
@@ -419,4 +519,9 @@ double PFLSZ_FreshnessScore(PFLSZoneRecord &zone)
    return score;
 }
 
-#endif
+// =====================================================
+// END OF PFLS ZONES MODULE
+// VERSION 1.20
+// =====================================================
+
+#endif // PFLS_ZONES_MQH
