@@ -1,13 +1,13 @@
 
 #property strict
-#property version "1.40"
-#property description "PFLS Trader - Multi-Timeframe Zone and Execution Engine"
+#property version "1.50"
+#property description "PFLS Trader - Multi-Timeframe Zone and Tick-Based Execution Engine"
 
 // =====================================================
 // PFLS TRADER
 // PRICE FLOW LADDER SEQUENCE
 // MAIN ENGINE
-// Version 1.40
+// Version 1.50
 // =====================================================
 
 #include "PFLS_Zones.mqh"
@@ -48,6 +48,17 @@ string TimeframeNames[8] =
    "M5",
    "M1"
 };
+
+// =====================================================
+// CACHED MULTI-TIMEFRAME ZONES
+// Updated by the timer scanner.
+// Read by both timer and tick processing.
+// =====================================================
+
+PFLSZoneRecord PFLS_CachedDemandZones[8];
+PFLSZoneRecord PFLS_CachedSupplyZones[8];
+
+datetime PFLS_LastNoTargetNoticeBar = 0;
 
 // =====================================================
 // ZONE STATE LABEL
@@ -102,15 +113,9 @@ void PrintZone(
       " | Touches: ",
       zone.touches,
       " | Freshness: ",
-      DoubleToString(
-         PFLSZ_FreshnessScore(zone),
-         1
-      ),
+      DoubleToString(PFLSZ_FreshnessScore(zone), 1),
       " | Distance: ",
-      DoubleToString(
-         zone.distancePoints,
-         1
-      ),
+      DoubleToString(zone.distancePoints, 1),
       " points"
    );
 }
@@ -143,10 +148,7 @@ void ScanConfluence(
          if(!zones[j].valid)
             continue;
 
-         if(PFLSZ_ZonesOverlap(
-            zones[i],
-            zones[j]
-         ))
+         if(PFLSZ_ZonesOverlap(zones[i], zones[j]))
          {
             foundConfluence = true;
 
@@ -194,15 +196,13 @@ bool PFLS_FindNearestTarget(
 {
    PFLSZ_Reset(target);
 
-   double bestDistance = DBL_MAX;
+   double bestDistance = 1.0e100;
 
    for(int i = 0; i < 8; i++)
    {
       PFLSZoneRecord candidate;
 
-      // ---------------------------------------------
-      // BUY: Find nearest valid supply zone above
-      // ---------------------------------------------
+      // BUY: nearest supply above price.
 
       if(isBuy)
       {
@@ -228,9 +228,7 @@ bool PFLS_FindNearestTarget(
          }
       }
 
-      // ---------------------------------------------
-      // SELL: Find nearest valid demand zone below
-      // ---------------------------------------------
+      // SELL: nearest demand below price.
 
       else
       {
@@ -270,58 +268,62 @@ void PFLS_ProcessEntry(
    double currentPrice
 )
 {
-   // M5 is index 6 in our timeframe list.
+   // M5 is index 6.
 
-   PFLSZoneRecord m5Demand =
-      demandZones[6];
-
-   PFLSZoneRecord m5Supply =
-      supplyZones[6];
+   PFLSZoneRecord m5Demand = demandZones[6];
+   PFLSZoneRecord m5Supply = supplyZones[6];
 
    bool isBuy = false;
 
    datetime signalBarTime = 0;
 
-   // ---------------------------------------------
-   // Get completed M5 candle confirmation
-   // ---------------------------------------------
+   PFLSZoneRecord entryZone;
+
+   PFLSZ_Reset(entryZone);
+
+   // --------------------------------------------------
+   // GET M5 SIGNAL
+   // The execution module preserves the original
+   // rejection zone and monitors breakout ticks.
+   // --------------------------------------------------
 
    if(!PFLS_ExecutionGetM5Signal(
       m5Demand,
       m5Supply,
       isBuy,
-      signalBarTime
+      signalBarTime,
+      entryZone
    ))
    {
       return;
    }
 
-   // ---------------------------------------------
-   // Identify entry zone
-   // ---------------------------------------------
+   if(signalBarTime <= 0)
+      return;
 
-   PFLSZoneRecord entryZone;
-
-   if(isBuy)
-      entryZone = m5Demand;
-   else
-      entryZone = m5Supply;
+   // --------------------------------------------------
+   // VALIDATE PRESERVED ENTRY ZONE
+   // --------------------------------------------------
 
    if(!entryZone.valid ||
       entryZone.invalidated)
    {
       Print(
-         "PFLS: Signal rejected. Entry zone invalid."
+         "PFLS: Signal rejected. Preserved entry zone invalid."
       );
+
+      PFLS_ExecutionCompleteSignal(signalBarTime);
 
       return;
    }
 
-   // ---------------------------------------------
-   // Find mandatory opposing target
-   // ---------------------------------------------
+   // --------------------------------------------------
+   // FIND OPPOSING TARGET
+   // --------------------------------------------------
 
    PFLSZoneRecord targetZone;
+
+   PFLSZ_Reset(targetZone);
 
    if(!PFLS_FindNearestTarget(
       isBuy,
@@ -331,25 +333,42 @@ void PFLS_ProcessEntry(
       targetZone
    ))
    {
-      Print(
-         "PFLS: Signal found, but no valid opposing target."
-      );
+      if(PFLS_LastNoTargetNoticeBar != signalBarTime)
+      {
+         Print(
+            "PFLS: Breakout detected, but no valid opposing target."
+         );
+
+         Print(
+            "PFLS: Signal remains pending for target validation."
+         );
+
+         PFLS_LastNoTargetNoticeBar = signalBarTime;
+      }
+
+      // IMPORTANT:
+      // Do not consume the signal.
+      // The next tick can check for a valid target again.
 
       return;
    }
 
-   // ---------------------------------------------
-   // Report signal
-   // ---------------------------------------------
+   // --------------------------------------------------
+   // REPORT VALIDATED SIGNAL
+   // --------------------------------------------------
+
+   Print(
+      "================================"
+   );
 
    Print(
       "PFLS: M5 ",
       isBuy ? "BUY" : "SELL",
-      " confirmation detected."
+      " BREAKOUT VALIDATED"
    );
 
    Print(
-      "PFLS: Signal candle: ",
+      "Signal candle: ",
       TimeToString(
          signalBarTime,
          TIME_DATE | TIME_MINUTES
@@ -357,40 +376,22 @@ void PFLS_ProcessEntry(
    );
 
    Print(
-      "PFLS: Entry zone: ",
-      DoubleToString(
-         entryZone.lower,
-         _Digits
-      ),
+      "Preserved entry zone: ",
+      DoubleToString(entryZone.lower, _Digits),
       " - ",
-      DoubleToString(
-         entryZone.upper,
-         _Digits
-      )
+      DoubleToString(entryZone.upper, _Digits)
    );
 
    Print(
-      "PFLS: Target zone: ",
-      DoubleToString(
-         targetZone.lower,
-         _Digits
-      ),
+      "Opposing target zone: ",
+      DoubleToString(targetZone.lower, _Digits),
       " - ",
-      DoubleToString(
-         targetZone.upper,
-         _Digits
-      )
+      DoubleToString(targetZone.upper, _Digits)
    );
 
-   Print(
-      "PFLS: Passing signal to execution safety checks."
-   );
-
-   // ---------------------------------------------
-   // Execution module controls whether an order
-   // can actually be submitted.
-   // Execution remains disabled by default.
-   // ---------------------------------------------
+   // --------------------------------------------------
+   // EXECUTION SAFETY CHECKS
+   // --------------------------------------------------
 
    PFLS_ExecutionTryTrade(
       isBuy,
@@ -398,10 +399,29 @@ void PFLS_ProcessEntry(
       targetZone,
       signalBarTime
    );
+
+   // --------------------------------------------------
+   // COMPLETE SIGNAL
+   // Target was validated.
+   // The signal must not be processed repeatedly.
+   // --------------------------------------------------
+
+   PFLS_ExecutionCompleteSignal(signalBarTime);
+
+   PFLS_LastNoTargetNoticeBar = 0;
+
+   Print(
+      "PFLS: Signal processing finished."
+   );
+
+   Print(
+      "================================"
+   );
 }
 
 // =====================================================
 // MAIN MARKET SCANNER
+// Runs on the configured timer interval.
 // =====================================================
 
 void ScanMarket()
@@ -430,10 +450,6 @@ void ScanMarket()
    double price =
       (tick.bid + tick.ask) / 2.0;
 
-   PFLSZoneRecord demandZones[8];
-
-   PFLSZoneRecord supplyZones[8];
-
    Print(
       "========== PFLS SCAN =========="
    );
@@ -448,31 +464,25 @@ void ScanMarket()
       DoubleToString(price, _Digits)
    );
 
-   // ---------------------------------------------
-   // Scan all eight timeframes
-   // ---------------------------------------------
+   // --------------------------------------------------
+   // SCAN ALL EIGHT TIMEFRAMES
+   // --------------------------------------------------
 
    for(int i = 0; i < 8; i++)
    {
-      PFLSZ_Reset(demandZones[i]);
+      PFLSZ_Reset(PFLS_CachedDemandZones[i]);
 
-      PFLSZ_Reset(supplyZones[i]);
+      PFLSZ_Reset(PFLS_CachedSupplyZones[i]);
 
-      // IMPORTANT:
-      // The argument order matches PFLS_Zones.mqh v1.20:
-      // symbol, timeframe, lookback, strength, price,
-      // nearestDemand, nearestSupply.
-
-      bool detected =
-         PFLSZ_DetectNearestZones(
-            _Symbol,
-            Timeframes[i],
-            LookbackBars,
-            PivotStrength,
-            price,
-            demandZones[i],
-            supplyZones[i]
-         );
+      bool detected = PFLSZ_DetectNearestZones(
+         _Symbol,
+         Timeframes[i],
+         LookbackBars,
+         PivotStrength,
+         price,
+         PFLS_CachedDemandZones[i],
+         PFLS_CachedSupplyZones[i]
+      );
 
       Print(
          "---------- ",
@@ -490,40 +500,40 @@ void ScanMarket()
 
       PrintZone(
          "Demand",
-         demandZones[i],
+         PFLS_CachedDemandZones[i],
          _Digits
       );
 
       PrintZone(
          "Supply",
-         supplyZones[i],
+         PFLS_CachedSupplyZones[i],
          _Digits
       );
    }
 
-   // ---------------------------------------------
-   // Multi-timeframe confluence
-   // ---------------------------------------------
+   // --------------------------------------------------
+   // MULTI-TIMEFRAME CONFLUENCE
+   // --------------------------------------------------
 
    ScanConfluence(
-      demandZones,
+      PFLS_CachedDemandZones,
       "DEMAND",
       _Digits
    );
 
    ScanConfluence(
-      supplyZones,
+      PFLS_CachedSupplyZones,
       "SUPPLY",
       _Digits
    );
 
-   // ---------------------------------------------
-   // M5 entry processing
-   // ---------------------------------------------
+   // --------------------------------------------------
+   // PROCESS SIGNAL USING REFRESHED ZONES
+   // --------------------------------------------------
 
    PFLS_ProcessEntry(
-      demandZones,
-      supplyZones,
+      PFLS_CachedDemandZones,
+      PFLS_CachedSupplyZones,
       price
    );
 
@@ -549,16 +559,34 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
-   EventSetTimer(
-      ScanIntervalSeconds
-   );
+   // Reset cached zones.
+
+   for(int i = 0; i < 8; i++)
+   {
+      PFLSZ_Reset(PFLS_CachedDemandZones[i]);
+
+      PFLSZ_Reset(PFLS_CachedSupplyZones[i]);
+   }
+
+   PFLS_ExecutionResetPending();
+
+   // Start timer.
+
+   if(!EventSetTimer(ScanIntervalSeconds))
+   {
+      Print(
+         "PFLS: Failed to initialize market scanner timer."
+      );
+
+      return INIT_FAILED;
+   }
 
    Print(
       "================================"
    );
 
    Print(
-      "PFLS ENGINE v1.40 INITIALIZED"
+      "PFLS ENGINE v1.50 INITIALIZED"
    );
 
    Print(
@@ -579,7 +607,19 @@ int OnInit()
    );
 
    Print(
-      "M5 confirmation: ENABLED"
+      "M5 rejection detection: ENABLED"
+   );
+
+   Print(
+      "Tick-based breakout monitoring: ENABLED"
+   );
+
+   Print(
+      "Preserved entry zones: ENABLED"
+   );
+
+   Print(
+      "Target validation: ENABLED"
    );
 
    Print(
@@ -605,6 +645,7 @@ int OnInit()
 
 // =====================================================
 // TIMER EVENT
+// Refreshes the eight-timeframe market structure.
 // =====================================================
 
 void OnTimer()
@@ -613,20 +654,46 @@ void OnTimer()
 }
 
 // =====================================================
-// SHUTDOWN
+// TICK EVENT
+// Monitors M5 breakout conditions on incoming ticks.
 // =====================================================
 
-void OnDeinit(
-   const int reason
-)
+void OnTick()
 {
-   EventKillTimer();
+   MqlTick tick;
 
-   Print(
-      "PFLS Engine stopped."
+   if(!SymbolInfoTick(_Symbol, tick))
+      return;
+
+   if(tick.bid <= 0.0 ||
+      tick.ask <= 0.0)
+   {
+      return;
+   }
+
+   double currentPrice =
+      (tick.bid + tick.ask) / 2.0;
+
+   PFLS_ProcessEntry(
+      PFLS_CachedDemandZones,
+      PFLS_CachedSupplyZones,
+      currentPrice
    );
 }
 
 // =====================================================
-// END OF PFLS ENGINE v1.40
+// SHUTDOWN
+// =====================================================
+
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+
+   Print(
+      "PFLS Engine v1.50 stopped."
+   );
+}
+
+// =====================================================
+// END OF PFLS ENGINE v1.50
 // =====================================================
