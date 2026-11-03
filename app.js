@@ -1,13 +1,18 @@
+
 /* ==========================================
-   PFLS TRADER
+   PFLS TRADER v1.30
    Price Flow Ladder Sequence
-   Market: Deriv Volatility 75 Standard
+
+   Market: Deriv Volatility 75
    Symbol: R_75
 
-   Research prototype:
-   - Public market data only
+   RESEARCH BUILD
+   - Public market data
    - Eight timeframe analysis
    - Experimental supply/demand detection
+   - Nearest-zone calculations
+   - Zone interaction states
+   - Multi-timeframe zone confluence
    - No automatic trade execution
 ========================================== */
 
@@ -15,6 +20,7 @@
   "use strict";
 
   const SYMBOL = "R_75";
+
   const WS_URL =
     "wss://api.derivws.com/trading/v1/options/ws/public";
 
@@ -55,11 +61,11 @@
 
   let socket = null;
   let currentPrice = null;
+
   let selectedTimeframe = elements.timeframe
     ? elements.timeframe.value
     : "1m";
 
-  let reconnectTimer = null;
   let requestCounter = 100;
 
   const marketData = {};
@@ -69,20 +75,20 @@
     marketData[tf.id] = [];
   });
 
-  /* ------------------------------------------
+  /* ==========================================
      BASIC HELPERS
-  ------------------------------------------ */
+  ========================================== */
 
   function setText(element, value) {
-    if (element) element.textContent = value;
+    if (element) {
+      element.textContent = value;
+    }
   }
 
   function setStatus(message, online = false) {
     if (!elements.status) return;
 
-    elements.status.textContent = online
-      ? "● " + message
-      : "● " + message;
+    elements.status.textContent = "● " + message;
 
     elements.status.classList.toggle("online", online);
     elements.status.classList.toggle("offline", !online);
@@ -105,16 +111,27 @@
     return Number(value).toFixed(2);
   }
 
-  /* ------------------------------------------
+  function average(values) {
+    if (!values.length) return 0;
+
+    return values.reduce((sum, value) => sum + value, 0) /
+      values.length;
+  }
+
+  function getTimeframeLabel(id) {
+    const tf = TIMEFRAMES.find(item => item.id === id);
+    return tf ? tf.label : id.toUpperCase();
+  }
+
+  /* ==========================================
      DERIV CONNECTION
-  ------------------------------------------ */
+  ========================================== */
 
   function connectMarket() {
-    clearTimeout(reconnectTimer);
-
     if (socket) {
       socket.onclose = null;
       socket.close();
+      socket = null;
     }
 
     setStatus("CONNECTING TO DERIV");
@@ -122,7 +139,7 @@
     try {
       socket = new WebSocket(WS_URL);
     } catch (error) {
-      console.error(error);
+      console.error("Connection error:", error);
       setStatus("CONNECTION FAILED");
       return;
     }
@@ -145,13 +162,17 @@
       try {
         data = JSON.parse(event.data);
       } catch (error) {
-        console.error("Invalid API response", error);
+        console.error("Invalid API response:", error);
         return;
       }
 
       if (data.error) {
-        console.error("Deriv error:", data.error);
-        setStatus("API ERROR: " + data.error.message);
+        console.error("Deriv API error:", data.error);
+
+        setStatus(
+          "API ERROR: " + data.error.message
+        );
+
         return;
       }
 
@@ -168,9 +189,9 @@
     };
   }
 
-  /* ------------------------------------------
-     REQUEST ALL EIGHT TIMEFRAMES
-  ------------------------------------------ */
+  /* ==========================================
+     REQUEST ALL TIMEFRAMES
+  ========================================== */
 
   function requestAllTimeframes() {
     TIMEFRAMES.forEach(tf => {
@@ -178,7 +199,7 @@
 
       requestMap[reqId] = tf.id;
 
-      send({
+      const sent = send({
         ticks_history: SYMBOL,
         style: "candles",
         granularity: tf.source,
@@ -186,12 +207,16 @@
         end: "latest",
         req_id: reqId
       });
+
+      if (!sent) {
+        delete requestMap[reqId];
+      }
     });
   }
 
-  /* ------------------------------------------
-     HANDLE DERIV MESSAGES
-  ------------------------------------------ */
+  /* ==========================================
+     HANDLE MARKET MESSAGES
+  ========================================== */
 
   function handleMarketMessage(data) {
 
@@ -206,6 +231,8 @@
         console.warn("Unknown candle request:", data.req_id);
         return;
       }
+
+      delete requestMap[data.req_id];
 
       marketData[timeframe] = data.candles
         .map(candle => ({
@@ -246,16 +273,11 @@
     if (data.msg_type === "tick" && data.tick) {
       updateLivePrice(data.tick);
     }
-
-    // Some API errors or unexpected messages are useful to inspect.
-    if (data.msg_type && data.msg_type !== "tick") {
-      console.log("Deriv message:", data.msg_type);
-    }
   }
 
-  /* ------------------------------------------
+  /* ==========================================
      WEEKLY CANDLE AGGREGATION
-  ------------------------------------------ */
+  ========================================== */
 
   function rebuildWeeklyCandles() {
     const daily = marketData["1d"];
@@ -263,14 +285,21 @@
 
     daily.forEach(candle => {
       const date = new Date(candle.epoch * 1000);
+
       const day = date.getUTCDay();
       const offset = (day + 6) % 7;
 
       const monday = new Date(date);
-      monday.setUTCDate(date.getUTCDate() - offset);
+
+      monday.setUTCDate(
+        date.getUTCDate() - offset
+      );
+
       monday.setUTCHours(0, 0, 0, 0);
 
-      const start = Math.floor(monday.getTime() / 1000);
+      const start = Math.floor(
+        monday.getTime() / 1000
+      );
 
       if (!groups.has(start)) {
         groups.set(start, {
@@ -283,8 +312,16 @@
       } else {
         const group = groups.get(start);
 
-        group.high = Math.max(group.high, candle.high);
-        group.low = Math.min(group.low, candle.low);
+        group.high = Math.max(
+          group.high,
+          candle.high
+        );
+
+        group.low = Math.min(
+          group.low,
+          candle.low
+        );
+
         group.close = candle.close;
       }
     });
@@ -292,15 +329,18 @@
     marketData["1w"] = [...groups.values()];
   }
 
-  /* ------------------------------------------
+  /* ==========================================
      LIVE PRICE AND CANDLE UPDATES
-  ------------------------------------------ */
+  ========================================== */
 
   function updateLivePrice(tick) {
     const price = Number(tick.quote);
     const epoch = Number(tick.epoch);
 
-    if (!Number.isFinite(price) || !Number.isFinite(epoch)) {
+    if (
+      !Number.isFinite(price) ||
+      !Number.isFinite(epoch)
+    ) {
       return;
     }
 
@@ -309,7 +349,8 @@
     setText(elements.price, formatPrice(price));
     setText(elements.priceChange, "Live Deriv market quote");
 
-    TIMEFRAMES.filter(tf => tf.id !== "1w")
+    TIMEFRAMES
+      .filter(tf => tf.id !== "1w")
       .forEach(tf => {
         const series = marketData[tf.id];
 
@@ -322,8 +363,17 @@
 
         if (last.epoch === start) {
           last.close = price;
-          last.high = Math.max(last.high, price);
-          last.low = Math.min(last.low, price);
+
+          last.high = Math.max(
+            last.high,
+            price
+          );
+
+          last.low = Math.min(
+            last.low,
+            price
+          );
+
         } else if (start > last.epoch) {
           series.push({
             epoch: start,
@@ -333,7 +383,9 @@
             close: price
           });
 
-          if (series.length > 350) series.shift();
+          if (series.length > 500) {
+            series.shift();
+          }
         }
       });
 
@@ -341,128 +393,343 @@
     renderEverything();
   }
 
-  /* ------------------------------------------
+  /* ==========================================
+     ZONE INTERACTION STATUS
+  ========================================== */
+
+  function getZoneStatus(zone, price) {
+    if (
+      price >= zone.low &&
+      price <= zone.high
+    ) {
+      return "INSIDE";
+    }
+
+    if (zone.type === "Demand") {
+
+      if (price < zone.low) {
+        return "BELOW ZONE";
+      }
+
+      return zone.touches > 0
+        ? "DEPARTED"
+        : "APPROACHING";
+    }
+
+    if (zone.type === "Supply") {
+
+      if (price > zone.high) {
+        return "ABOVE ZONE";
+      }
+
+      return zone.touches > 0
+        ? "DEPARTED"
+        : "APPROACHING";
+    }
+
+    return "UNKNOWN";
+  }
+
+  /* ==========================================
      EXPERIMENTAL ZONE DETECTION
-  ------------------------------------------ */
+  ========================================== */
 
   function detectZones(series, timeframe) {
     const zones = [];
 
-    if (!series || series.length < 15) {
+    if (!series || series.length < 20) {
       return zones;
     }
 
     const data = series.slice(-180);
 
-    for (let i = 3; i < data.length - 2; i++) {
+    // The final candle may still be forming.
+    // Do not use it as an impulse confirmation.
+    for (let i = 10; i < data.length - 2; i++) {
+
       const base = data[i];
       const previous = data[i - 1];
-      const next = data[i + 1];
+      const impulse = data[i + 1];
 
       const baseRange = base.high - base.low;
 
       if (baseRange <= 0) continue;
 
       const recentRanges = data
-        .slice(Math.max(0, i - 10), i)
-        .map(c => c.high - c.low);
+        .slice(i - 10, i)
+        .map(candle => candle.high - candle.low)
+        .filter(range => range > 0);
 
-      if (!recentRanges.length) continue;
+      const averageRange = average(recentRanges);
 
-      const averageRange =
-        recentRanges.reduce((a, b) => a + b, 0) /
-        recentRanges.length;
+      if (!averageRange) continue;
 
-      if (!averageRange || baseRange > averageRange * 1.5) {
+      // Look for a relatively compact base candle.
+      if (baseRange > averageRange * 1.5) {
         continue;
       }
 
-      const nextBody = Math.abs(next.close - next.open);
+      const impulseBody = Math.abs(
+        impulse.close - impulse.open
+      );
 
-      if (nextBody < averageRange * 1.15) continue;
+      if (impulseBody < averageRange * 1.15) {
+        continue;
+      }
 
       const bullish =
-        next.close > next.open &&
-        next.close > base.high;
+        impulse.close > impulse.open &&
+        impulse.close > base.high;
 
       const bearish =
-        next.close < next.open &&
-        next.close < base.low;
+        impulse.close < impulse.open &&
+        impulse.close < base.low;
+
+      let candidate = null;
 
       if (bullish) {
-        zones.push({
+        candidate = {
           type: "Demand",
           timeframe,
-          low: Math.min(base.low, previous.low),
+          low: base.low,
           high: Math.max(base.open, base.close),
           epoch: base.epoch,
-          score: Math.min(
-            95,
-            Math.round(55 + nextBody / averageRange * 10)
-          )
-        });
+          impulseRatio: impulseBody / averageRange
+        };
       }
 
       if (bearish) {
-        zones.push({
+        candidate = {
           type: "Supply",
           timeframe,
           low: Math.min(base.open, base.close),
-          high: Math.max(base.high, previous.high),
+          high: base.high,
           epoch: base.epoch,
-          score: Math.min(
-            95,
-            Math.round(55 + nextBody / averageRange * 10)
-          )
-        });
+          impulseRatio: impulseBody / averageRange
+        };
       }
+
+      if (!candidate) continue;
+
+      if (candidate.high <= candidate.low) {
+        continue;
+      }
+
+      // Examine candles formed after the zone.
+      let invalidated = false;
+      let touches = 0;
+      let wasInside = false;
+
+      for (
+        let j = i + 2;
+        j < data.length;
+        j++
+      ) {
+        const candle = data[j];
+
+        // Demand invalidation
+        if (
+          candidate.type === "Demand" &&
+          candle.close < candidate.low
+        ) {
+          invalidated = true;
+          break;
+        }
+
+        // Supply invalidation
+        if (
+          candidate.type === "Supply" &&
+          candle.close > candidate.high
+        ) {
+          invalidated = true;
+          break;
+        }
+
+        const overlaps =
+          candle.high >= candidate.low &&
+          candle.low <= candidate.high;
+
+        if (overlaps && !wasInside) {
+          touches++;
+        }
+
+        wasInside = overlaps;
+      }
+
+      if (invalidated) continue;
+
+      // Experimental structural score.
+      // This is NOT a probability of success.
+      const impulseScore = Math.min(
+        35,
+        Math.max(
+          0,
+          (candidate.impulseRatio - 1) * 20
+        )
+      );
+
+      const touchPenalty = Math.min(
+        45,
+        touches * 15
+      );
+
+      const score = Math.max(
+        0,
+        Math.min(
+          95,
+          Math.round(60 + impulseScore - touchPenalty)
+        )
+      );
+
+      const zone = {
+        ...candidate,
+        touches,
+        score,
+        invalidated: false
+      };
+
+      if (currentPrice !== null) {
+        zone.status = getZoneStatus(
+          zone,
+          currentPrice
+        );
+      } else {
+        zone.status = "WAITING";
+      }
+
+      zones.push(zone);
     }
 
     return zones;
   }
 
-  /* ------------------------------------------
-     ALL TIMEFRAME ANALYSIS
-  ------------------------------------------ */
+  /* ==========================================
+     COLLECT ALL TIMEFRAME ZONES
+  ========================================== */
 
   function collectAllZones() {
     let zones = [];
 
     TIMEFRAMES.forEach(tf => {
-      const series = getSeries(tf.id);
-
       zones = zones.concat(
-        detectZones(series, tf.id)
+        detectZones(
+          getSeries(tf.id),
+          tf.id
+        )
       );
     });
 
     return zones;
   }
 
-  function getNearestZones(zones) {
-    if (currentPrice === null) {
-      return { demand: null, supply: null };
+  /* ==========================================
+     DISTANCE TO ZONE
+  ========================================== */
+
+  function getZoneDistance(zone, price) {
+    if (
+      price >= zone.low &&
+      price <= zone.high
+    ) {
+      return 0;
     }
 
-    const demand = zones
-      .filter(zone =>
-        zone.type === "Demand" &&
-        zone.high <= currentPrice
-      )
-      .sort((a, b) => b.high - a.high);
+    if (price < zone.low) {
+      return zone.low - price;
+    }
 
-    const supply = zones
-      .filter(zone =>
-        zone.type === "Supply" &&
-        zone.low >= currentPrice
-      )
-      .sort((a, b) => a.low - b.low);
+    return price - zone.high;
+  }
+
+  /* ==========================================
+     NEAREST ZONE SELECTION
+  ========================================== */
+
+  function getNearestZones(zones) {
+    if (currentPrice === null) {
+      return {
+        demand: null,
+        supply: null
+      };
+    }
+
+    const demandZones = zones
+      .filter(zone => zone.type === "Demand")
+      .map(zone => ({
+        ...zone,
+        distance: getZoneDistance(zone, currentPrice)
+      }))
+      .sort((a, b) => a.distance - b.distance);
+
+    const supplyZones = zones
+      .filter(zone => zone.type === "Supply")
+      .map(zone => ({
+        ...zone,
+        distance: getZoneDistance(zone, currentPrice)
+      }))
+      .sort((a, b) => a.distance - b.distance);
 
     return {
-      demand: demand[0] || null,
-      supply: supply[0] || null
+      demand: demandZones[0] || null,
+      supply: supplyZones[0] || null
     };
   }
+
+  /* ==========================================
+     MULTI-TIMEFRAME ZONE CONFLUENCE
+     MTZC
+  ========================================== */
+
+  function detectConfluence(zones) {
+    const results = [];
+
+    const validZones = zones.filter(zone =>
+      !zone.invalidated
+    );
+
+    validZones.forEach((zone, index) => {
+      const matches = validZones.filter((other, otherIndex) => {
+
+        if (index === otherIndex) return false;
+
+        if (zone.type !== other.type) {
+          return false;
+        }
+
+        if (zone.timeframe === other.timeframe) {
+          return false;
+        }
+
+        return (
+          zone.low <= other.high &&
+          other.low <= zone.high
+        );
+      });
+
+      if (!matches.length) return;
+
+      const uniqueTimeframes = [
+        ...new Set([
+          zone.timeframe,
+          ...matches.map(item => item.timeframe)
+        ])
+      ];
+
+      results.push({
+        type: zone.type,
+        low: zone.low,
+        high: zone.high,
+        timeframes: uniqueTimeframes,
+        count: uniqueTimeframes.length
+      });
+    });
+
+    return results;
+  }
+
+  /* ==========================================
+     ZONE SUMMARY
+  ========================================== */
 
   function renderZoneSummary(zones) {
     const nearest = getNearestZones(zones);
@@ -477,11 +744,14 @@
 
       setText(
         elements.demandMeta,
-        nearest.demand.timeframe.toUpperCase() +
-        " · Candidate rating " +
-        nearest.demand.score +
-        "/100"
+        getTimeframeLabel(nearest.demand.timeframe) +
+        " · " +
+        nearest.demand.status +
+        " · " +
+        nearest.demand.touches +
+        " touches"
       );
+
     } else {
       setText(elements.demand, "No candidate found");
       setText(elements.demandMeta, "Awaiting a qualifying zone");
@@ -497,20 +767,34 @@
 
       setText(
         elements.supplyMeta,
-        nearest.supply.timeframe.toUpperCase() +
-        " · Candidate rating " +
-        nearest.supply.score +
-        "/100"
+        getTimeframeLabel(nearest.supply.timeframe) +
+        " · " +
+        nearest.supply.status +
+        " · " +
+        nearest.supply.touches +
+        " touches"
       );
+
     } else {
       setText(elements.supply, "No candidate found");
       setText(elements.supplyMeta, "Awaiting a qualifying zone");
     }
 
+    // The opposing zone is the nearest candidate
+    // of the opposite type to the nearest zone.
     let opposing = null;
 
-    if (nearest.demand) opposing = nearest.supply;
-    else if (nearest.supply) opposing = nearest.demand;
+    if (nearest.demand && nearest.supply) {
+      opposing = nearest.demand.distance <= nearest.supply.distance
+        ? nearest.supply
+        : nearest.demand;
+
+    } else if (nearest.demand) {
+      opposing = nearest.supply;
+
+    } else if (nearest.supply) {
+      opposing = nearest.demand;
+    }
 
     setText(
       elements.opposing,
@@ -523,13 +807,13 @@
 
     setText(
       elements.targetMeta,
-      "Candidate zones only. Confirm price action manually."
+      "Nearest opposing candidate · Manual confirmation required"
     );
   }
 
-  /* ------------------------------------------
+  /* ==========================================
      ZONE TABLE
-  ------------------------------------------ */
+  ========================================== */
 
   function renderZoneTable(zones) {
     if (!elements.zones) return;
@@ -540,14 +824,18 @@
       .filter(zone => currentPrice !== null)
       .map(zone => ({
         ...zone,
-        distance: zone.type === "Demand"
-          ? Math.max(0, currentPrice - zone.high)
-          : Math.max(0, zone.low - currentPrice)
+        distance: getZoneDistance(
+          zone,
+          currentPrice
+        )
       }))
       .sort((a, b) => a.distance - b.distance)
       .slice(0, 25);
 
-    setText(elements.zoneCount, zones.length + " zones");
+    setText(
+      elements.zoneCount,
+      zones.length + " zones"
+    );
 
     if (!sorted.length) {
       const row = document.createElement("tr");
@@ -559,6 +847,7 @@
 
       row.appendChild(cell);
       elements.zones.appendChild(row);
+
       return;
     }
 
@@ -567,16 +856,24 @@
 
       const values = [
         zone.type,
-        zone.timeframe.toUpperCase(),
+        getTimeframeLabel(zone.timeframe),
         formatPrice(zone.low) + " – " + formatPrice(zone.high),
         formatPrice(zone.distance),
-        "Candidate",
-        zone.score + "/100"
+        zone.status,
+        zone.score + "/100*"
       ];
 
-      values.forEach(value => {
+      values.forEach((value, index) => {
         const cell = document.createElement("td");
+
         cell.textContent = value;
+
+        if (index === 0) {
+          cell.className = zone.type === "Demand"
+            ? "type-demand"
+            : "type-supply";
+        }
+
         row.appendChild(cell);
       });
 
@@ -584,9 +881,9 @@
     });
   }
 
-  /* ------------------------------------------
+  /* ==========================================
      TIMEFRAME LADDER
-  ------------------------------------------ */
+  ========================================== */
 
   function renderLadder() {
     if (!elements.ladder) return;
@@ -595,8 +892,8 @@
 
     TIMEFRAMES.forEach(tf => {
       const series = getSeries(tf.id);
-      const item = document.createElement("div");
 
+      const item = document.createElement("div");
       item.className = "tf-card";
 
       const heading = document.createElement("b");
@@ -609,18 +906,30 @@
         const first = series[0];
         const last = series[series.length - 1];
 
-        direction.textContent =
-          last.close > first.close ? "↑ Bullish" :
-          last.close < first.close ? "↓ Bearish" :
-          "→ Neutral";
+        if (last.close > first.close) {
+          direction.textContent = "↑ Bullish";
+          item.classList.add("up");
+
+        } else if (last.close < first.close) {
+          direction.textContent = "↓ Bearish";
+          item.classList.add("down");
+
+        } else {
+          direction.textContent = "→ Neutral";
+        }
 
         small.textContent = series.length + " candles";
+
       } else {
         direction.textContent = "—";
         small.textContent = "Awaiting data";
       }
 
-      item.append(heading, direction, small);
+      item.append(
+        heading,
+        direction,
+        small
+      );
 
       if (tf.id === selectedTimeframe) {
         item.style.outline = "1px solid #23c58e";
@@ -630,11 +939,11 @@
     });
   }
 
-  /* ------------------------------------------
-     BASIC STRUCTURE OBSERVATION
-  ------------------------------------------ */
+  /* ==========================================
+     STRUCTURE OBSERVATION
+  ========================================== */
 
-  function renderStructure() {
+  function renderStructure(zones) {
     const series = getSeries(selectedTimeframe);
 
     if (series.length < 12) {
@@ -646,6 +955,7 @@
     }
 
     const recent = series.slice(-12);
+
     const first = recent[0];
     const last = recent[recent.length - 1];
 
@@ -655,24 +965,36 @@
       message =
         "Recent price progression is upward. " +
         "Observe possible higher highs and higher lows.";
+
     } else if (last.close < first.close) {
       message =
         "Recent price progression is downward. " +
         "Observe possible lower highs and lower lows.";
+
     } else {
       message =
         "Recent price is relatively unchanged. " +
         "Observe the next structural development.";
     }
 
+    const confluences = detectConfluence(zones);
+
+    const relevant = confluences.filter(item =>
+      item.timeframes.includes(selectedTimeframe)
+    );
+
+    message +=
+      " MTZC overlaps detected on this timeframe: " +
+      relevant.length + ".";
+
     setText(elements.structure, message);
   }
 
-  /* ------------------------------------------
+  /* ==========================================
      CANDLE CHART
-  ------------------------------------------ */
+  ========================================== */
 
-  function renderChart() {
+  function renderChart(zones) {
     const canvas = elements.chart;
 
     if (!canvas) return;
@@ -704,10 +1026,15 @@
 
     if (data.length < 2) return;
 
-    const highest = Math.max(...data.map(c => c.high));
-    const lowest = Math.min(...data.map(c => c.low));
-    const spread = highest - lowest || 1;
+    const highest = Math.max(
+      ...data.map(candle => candle.high)
+    );
 
+    const lowest = Math.min(
+      ...data.map(candle => candle.low)
+    );
+
+    const spread = highest - lowest || 1;
     const padding = 18;
 
     const y = price =>
@@ -728,37 +1055,40 @@
       ctx.stroke();
     }
 
-    // Visible timeframe zones
-    const visibleZones = detectZones(
-      series,
-      selectedTimeframe
-    );
+    // Draw selected timeframe zones
+    zones
+      .filter(zone =>
+        zone.timeframe === selectedTimeframe
+      )
+      .forEach(zone => {
+        const top = y(zone.high);
+        const bottom = y(zone.low);
 
-    visibleZones.forEach(zone => {
-      const top = y(zone.high);
-      const bottom = y(zone.low);
+        ctx.fillStyle = zone.type === "Demand"
+          ? "rgba(35,197,142,0.12)"
+          : "rgba(239,89,101,0.12)";
 
-      ctx.fillStyle = zone.type === "Demand"
-        ? "rgba(35,197,142,0.12)"
-        : "rgba(239,89,101,0.12)";
+        ctx.fillRect(
+          0,
+          top,
+          width,
+          Math.max(2, bottom - top)
+        );
+      });
 
-      ctx.fillRect(
-        0,
-        top,
-        width,
-        Math.max(2, bottom - top)
-      );
-    });
-
-    // Candle drawing
+    // Candles
     const gap = (width - 20) / data.length;
     const candleWidth = Math.max(2, gap * 0.58);
 
     data.forEach((candle, index) => {
       const x = 10 + index * gap + gap / 2;
-      const bullish = candle.close >= candle.open;
 
-      const candleColor = bullish ? "#23c58e" : "#ef5965";
+      const bullish =
+        candle.close >= candle.open;
+
+      const candleColor = bullish
+        ? "#23c58e"
+        : "#ef5965";
 
       ctx.strokeStyle = candleColor;
       ctx.fillStyle = candleColor;
@@ -771,8 +1101,13 @@
       ctx.stroke();
 
       // Body
-      const top = y(Math.max(candle.open, candle.close));
-      const bottom = y(Math.min(candle.open, candle.close));
+      const top = y(
+        Math.max(candle.open, candle.close)
+      );
+
+      const bottom = y(
+        Math.min(candle.open, candle.close)
+      );
 
       ctx.fillRect(
         x - candleWidth / 2,
@@ -783,18 +1118,18 @@
     });
   }
 
-  /* ------------------------------------------
+  /* ==========================================
      RENDER EVERYTHING
-  ------------------------------------------ */
+  ========================================== */
 
   function renderEverything() {
     const zones = collectAllZones();
 
-    renderChart();
+    renderChart(zones);
     renderZoneSummary(zones);
     renderZoneTable(zones);
     renderLadder();
-    renderStructure();
+    renderStructure(zones);
 
     if (elements.chartTitle) {
       const tf = TIMEFRAMES.find(
@@ -802,13 +1137,14 @@
       );
 
       elements.chartTitle.textContent =
-        "Volatility 75 · " + (tf ? tf.label : selectedTimeframe);
+        "Volatility 75 · " +
+        (tf ? tf.label : selectedTimeframe);
     }
   }
 
-  /* ------------------------------------------
+  /* ==========================================
      USER CONTROLS
-  ------------------------------------------ */
+  ========================================== */
 
   function refreshAnalysis() {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -817,11 +1153,14 @@
     }
 
     setStatus("REFRESHING MARKET HISTORY", true);
+
     requestAllTimeframes();
   }
 
   function changeTimeframe(value) {
-    if (!TIMEFRAMES.some(tf => tf.id === value)) return;
+    if (!TIMEFRAMES.some(tf => tf.id === value)) {
+      return;
+    }
 
     selectedTimeframe = value;
     renderEverything();
@@ -848,20 +1187,24 @@
     );
   }
 
-  window.addEventListener("resize", renderChart);
+  window.addEventListener(
+    "resize",
+    () => renderEverything()
+  );
 
-  /* ------------------------------------------
+  /* ==========================================
      INITIAL SCREEN
-  ------------------------------------------ */
+  ========================================== */
 
   setStatus("DISCONNECTED");
+
   renderEverything();
 
   console.log(
-    "PFLS Trader loaded. Market:",
-    SYMBOL,
-    "| Timeframes:",
-    TIMEFRAMES.length
+    "PFLS Trader v1.30 loaded.",
+    "Market:", SYMBOL,
+    "| Timeframes:", TIMEFRAMES.length,
+    "| Mode: READ ONLY"
   );
 
 })();
