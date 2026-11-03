@@ -7,15 +7,20 @@
 
 // =====================================================
 // PFLS TRADER - EXECUTION MODULE
-// Version 1.40
+// Version 1.50
 // TICK-BASED M5 REJECTION + BREAKOUT
 // =====================================================
+
+// -----------------------------------------------------
+// EXECUTION SETTINGS
+// -----------------------------------------------------
 
 input bool PFLS_EnableExecution = false;
 input bool PFLS_EmergencyStop = false;
 
 input double PFLS_FixedLots = 0.01;
 input double PFLS_MaxRiskPercent = 3.0;
+input double PFLS_MinRewardRisk = 1.2;
 input int PFLS_MaxTradesPerDay = 2;
 
 input ulong PFLS_MagicNumber = 751103;
@@ -23,9 +28,9 @@ input int PFLS_StopBufferPoints = 20;
 
 CTrade PFLS_Trade;
 
-// =====================================================
+// -----------------------------------------------------
 // SIGNAL TRACKING
-// =====================================================
+// -----------------------------------------------------
 
 datetime PFLS_LastExecutionBar = 0;
 datetime PFLS_LastProcessedRejectionBar = 0;
@@ -65,7 +70,7 @@ double PFLS_NormalizeTradePrice(double price)
 }
 
 // =====================================================
-// RESET PENDING REJECTION
+// RESET PENDING SIGNAL
 // =====================================================
 
 void PFLS_ExecutionResetPending()
@@ -85,7 +90,7 @@ void PFLS_ExecutionResetPending()
 
 // =====================================================
 // CONSUME CONFIRMED SIGNAL
-// Called by Engine only after target validation.
+// Called by Engine after its decision.
 // =====================================================
 
 void PFLS_ExecutionConsumeSignal(datetime signalTime)
@@ -142,9 +147,8 @@ bool PFLS_ExecutionIsBearishRejection(MqlRates &candle)
 // =====================================================
 // M5 SIGNAL ENGINE
 //
-// Called on every incoming tick.
-// Stores the original entry zone.
-// Breakout must occur during the immediately
+// Detects a rejection at a valid M5 zone.
+// Requires a breakout during the immediately
 // following M5 candle.
 // =====================================================
 
@@ -173,7 +177,7 @@ bool PFLS_ExecutionGetM5Signal(
       return false;
 
    // --------------------------------------------------
-   // CHECK EXISTING PENDING REJECTION
+   // EXISTING PENDING REJECTION
    // --------------------------------------------------
 
    if(PFLS_PendingRejectionTime > 0)
@@ -181,12 +185,9 @@ bool PFLS_ExecutionGetM5Signal(
       datetime expectedBreakoutBar =
          PFLS_PendingRejectionTime + periodSeconds;
 
-      // Pending setup has expired.
       if(currentBarOpen > expectedBreakoutBar)
       {
-         Print(
-            "PFLS: Pending M5 rejection expired."
-         );
+         Print("PFLS: Pending M5 rejection expired.");
 
          PFLS_LastProcessedRejectionBar =
             PFLS_PendingRejectionTime;
@@ -196,8 +197,6 @@ bool PFLS_ExecutionGetM5Signal(
          return false;
       }
 
-      // Do not allow confirmation outside the
-      // immediately following M5 candle.
       if(currentBarOpen != expectedBreakoutBar)
          return false;
 
@@ -213,18 +212,14 @@ bool PFLS_ExecutionGetM5Signal(
          {
             PFLS_PendingBreakoutConfirmed = true;
 
-            Print(
-               "PFLS: BUY breakout confirmed by live tick."
-            );
+            Print("PFLS: BUY breakout confirmed.");
          }
          else if(PFLS_PendingSell &&
                  tick.bid < PFLS_PendingRejectionLow)
          {
             PFLS_PendingBreakoutConfirmed = true;
 
-            Print(
-               "PFLS: SELL breakout confirmed by live tick."
-            );
+            Print("PFLS: SELL breakout confirmed.");
          }
       }
 
@@ -241,7 +236,7 @@ bool PFLS_ExecutionGetM5Signal(
    }
 
    // --------------------------------------------------
-   // READ MOST RECENT CLOSED M5 CANDLE
+   // MOST RECENT COMPLETED M5 CANDLE
    // --------------------------------------------------
 
    MqlRates candle[];
@@ -255,20 +250,16 @@ bool PFLS_ExecutionGetM5Signal(
       1,
       candle
    ) != 1)
-   {
       return false;
-   }
 
    datetime rejectionTime = candle[0].time;
 
-   if(rejectionTime <= PFLS_LastProcessedRejectionBar)
-      return false;
-
-   if(rejectionTime <= PFLS_LastExecutionBar)
+   if(rejectionTime <= PFLS_LastProcessedRejectionBar ||
+      rejectionTime <= PFLS_LastExecutionBar)
       return false;
 
    // --------------------------------------------------
-   // CHECK ZONE OVERLAP
+   // ZONE OVERLAP
    // --------------------------------------------------
 
    bool overlapsDemand =
@@ -289,7 +280,7 @@ bool PFLS_ExecutionGetM5Signal(
       return false;
 
    // --------------------------------------------------
-   // BULLISH REJECTION AT DEMAND
+   // BULLISH REJECTION
    // --------------------------------------------------
 
    if(overlapsDemand &&
@@ -316,7 +307,7 @@ bool PFLS_ExecutionGetM5Signal(
    }
 
    // --------------------------------------------------
-   // BEARISH REJECTION AT SUPPLY
+   // BEARISH REJECTION
    // --------------------------------------------------
 
    if(overlapsSupply &&
@@ -381,7 +372,9 @@ int PFLS_ExecutionCountToday()
       if(deal == 0)
          continue;
 
-      if(HistoryDealGetString(deal, DEAL_SYMBOL) != _Symbol)
+      if(HistoryDealGetString(
+         deal, DEAL_SYMBOL
+      ) != _Symbol)
          continue;
 
       if((ulong)HistoryDealGetInteger(
@@ -509,6 +502,10 @@ bool PFLS_ExecutionPermissions()
 
 // =====================================================
 // MAIN EXECUTION FUNCTION
+//
+// A failed pre-check does not mark the signal as
+// executed. Engine consumes the signal after its
+// one permitted execution decision.
 // =====================================================
 
 bool PFLS_ExecutionTryTrade(
@@ -540,6 +537,8 @@ bool PFLS_ExecutionTryTrade(
    if(PFLS_FixedLots != 0.01 ||
       PFLS_MaxRiskPercent <= 0.0 ||
       PFLS_MaxRiskPercent > 3.0 ||
+      PFLS_MinRewardRisk < 1.0 ||
+      PFLS_MinRewardRisk > 5.0 ||
       PFLS_MaxTradesPerDay < 1 ||
       PFLS_MaxTradesPerDay > 2 ||
       PFLS_StopBufferPoints < 1)
@@ -672,10 +671,15 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   double estimatedLoss = 0.0;
+   // --------------------------------------------------
+   // ESTIMATED RISK AND REWARD
+   // --------------------------------------------------
 
    ENUM_ORDER_TYPE orderType =
       isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+
+   double estimatedLoss = 0.0;
+   double estimatedReward = 0.0;
 
    if(!OrderCalcProfit(
       orderType,
@@ -690,7 +694,40 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
+   if(!OrderCalcProfit(
+      orderType,
+      _Symbol,
+      PFLS_FixedLots,
+      entryPrice,
+      takeProfit,
+      estimatedReward
+   ))
+   {
+      Print("PFLS: Reward calculation failed.");
+      return false;
+   }
+
    estimatedLoss = MathAbs(estimatedLoss);
+
+   if(estimatedLoss <= 0.0 ||
+      estimatedReward <= 0.0)
+   {
+      Print("PFLS: Invalid calculated risk or reward.");
+      return false;
+   }
+
+   double rewardRisk =
+      estimatedReward / estimatedLoss;
+
+   if(rewardRisk < PFLS_MinRewardRisk)
+   {
+      Print(
+         "PFLS: Reward-to-risk below minimum. Ratio: ",
+         DoubleToString(rewardRisk, 2)
+      );
+
+      return false;
+   }
 
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
@@ -720,11 +757,16 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   if(requiredMargin > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
+   if(requiredMargin >
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE))
    {
       Print("PFLS: Insufficient free margin.");
       return false;
    }
+
+   // --------------------------------------------------
+   // SUBMIT ORDER
+   // --------------------------------------------------
 
    PFLS_Trade.SetExpertMagicNumber(PFLS_MagicNumber);
    PFLS_Trade.SetDeviationInPoints(20);
@@ -735,7 +777,7 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // Prevent repeated attempts for the same signal.
+   // Mark before submission to prevent duplicate requests.
    PFLS_LastExecutionBar = signalBarTime;
 
    bool submitted = false;
@@ -787,6 +829,8 @@ bool PFLS_ExecutionTryTrade(
       isBuy ? "BUY" : "SELL",
       " | Lots: ",
       DoubleToString(PFLS_FixedLots, 2),
+      " | Estimated R:R: ",
+      DoubleToString(rewardRisk, 2),
       " | SL: ",
       DoubleToString(stopLoss, _Digits),
       " | TP: ",
