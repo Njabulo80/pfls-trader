@@ -1,7 +1,7 @@
 
 #property strict
-#property version "1.72"
-#property description "PFLS Trader - Multi-Timeframe Zone and Tick Execution Engine"
+#property version "1.80"
+#property description "PFLS Trader - Multi-Timeframe Structure Confluence and Tick Execution Engine"
 
 #include "PFLS_Zones.mqh"
 #include "PFLS_Execution.mqh"
@@ -13,8 +13,10 @@
 input int LookbackBars = 250;
 input int PivotStrength = 2;
 input int ScanIntervalSeconds = 30;
+input int MinimumHTFVotes = 3;
 
 #define PFLS_TIMEFRAME_COUNT 8
+#define PFLS_HTF_COUNT 5
 #define PFLS_M5_INDEX 6
 
 // =====================================================
@@ -44,6 +46,15 @@ bool PFLS_ZonesReady = false;
 datetime PFLS_LastScanTime = 0;
 
 // =====================================================
+// CONFLUENCE STORAGE
+// =====================================================
+
+datetime PFLS_ConfluenceSignalTime = 0;
+int PFLS_ConfluenceVotes = 0;
+bool PFLS_ConfluencePassed = false;
+bool PFLS_ConfluenceEvaluated = false;
+
+// =====================================================
 // RESET ZONES
 // =====================================================
 
@@ -54,6 +65,60 @@ void PFLS_ResetEngineZones()
       PFLSZ_Reset(PFLS_DemandZones[i]);
       PFLSZ_Reset(PFLS_SupplyZones[i]);
    }
+}
+
+// =====================================================
+// HIGHER TIMEFRAME CONFLUENCE
+// =====================================================
+
+bool PFLS_CheckHigherTimeframeConfluence(
+   bool isBuy,
+   int &votes
+)
+{
+   votes = 0;
+
+   int requiredDirection = isBuy ? 1 : -1;
+
+   for(int i = 0; i < PFLS_HTF_COUNT; i++)
+   {
+      int bias = (int)PFLSZ_DetectMarketStructure(
+         _Symbol,
+         PFLS_Timeframes[i],
+         LookbackBars,
+         PivotStrength
+      );
+
+      string structure = "NEUTRAL";
+
+      if(bias > 0)
+         structure = "BULLISH";
+      else if(bias < 0)
+         structure = "BEARISH";
+
+      Print(
+         "PFLS STRUCTURE | ",
+         EnumToString(PFLS_Timeframes[i]),
+         " | ",
+         structure
+      );
+
+      if(bias == requiredDirection)
+         votes++;
+   }
+
+   Print(
+      "PFLS CONFLUENCE | Direction: ",
+      isBuy ? "BUY" : "SELL",
+      " | Votes: ",
+      votes,
+      "/",
+      PFLS_HTF_COUNT,
+      " | Required: ",
+      MinimumHTFVotes
+   );
+
+   return (votes >= MinimumHTFVotes);
 }
 
 // =====================================================
@@ -89,7 +154,6 @@ void ScanMarket()
       PFLSZ_Reset(demand);
       PFLSZ_Reset(supply);
 
-      // Zones v1.30 requires currentPrice.
       bool detected = PFLSZ_DetectNearestZones(
          _Symbol,
          PFLS_Timeframes[i],
@@ -114,7 +178,7 @@ void ScanMarket()
    PFLS_LastScanTime = TimeCurrent();
 
    Print(
-      "PFLS v1.72 SCAN | Symbol: ",
+      "PFLS v1.80 SCAN | Symbol: ",
       _Symbol,
       " | Price: ",
       DoubleToString(currentPrice, _Digits),
@@ -215,7 +279,6 @@ void PFLS_ProcessEntry()
    PFLSZoneRecord entryZone;
    PFLSZ_Reset(entryZone);
 
-   // Execution v1.60: exactly five arguments.
    bool signalFound = PFLS_ExecutionGetM5Signal(
       PFLS_DemandZones[PFLS_M5_INDEX],
       PFLS_SupplyZones[PFLS_M5_INDEX],
@@ -234,6 +297,10 @@ void PFLS_ProcessEntry()
       TimeToString(signalTime)
    );
 
+   // --------------------------------------------------
+   // ENTRY ZONE VALIDATION
+   // --------------------------------------------------
+
    if(!entryZone.valid || entryZone.invalidated)
    {
       Print("PFLS: Invalid entry zone.");
@@ -242,7 +309,47 @@ void PFLS_ProcessEntry()
       return;
    }
 
-   // Wait for fresh target-zone information.
+   // --------------------------------------------------
+   // HIGHER TIMEFRAME CONFLUENCE
+   // Evaluate once per signal.
+   // --------------------------------------------------
+
+   if(!PFLS_ConfluenceEvaluated ||
+      PFLS_ConfluenceSignalTime != signalTime)
+   {
+      PFLS_ConfluenceSignalTime = signalTime;
+      PFLS_ConfluenceVotes = 0;
+
+      PFLS_ConfluencePassed =
+         PFLS_CheckHigherTimeframeConfluence(
+            isBuy,
+            PFLS_ConfluenceVotes
+         );
+
+      PFLS_ConfluenceEvaluated = true;
+   }
+
+   if(!PFLS_ConfluencePassed)
+   {
+      Print(
+         "PFLS SIGNAL REJECTED | Insufficient higher timeframe agreement."
+      );
+
+      PFLS_ExecutionConsumeSignal(signalTime);
+      return;
+   }
+
+   Print(
+      "PFLS CONFLUENCE PASSED | ",
+      PFLS_ConfluenceVotes,
+      "/",
+      PFLS_HTF_COUNT
+   );
+
+   // --------------------------------------------------
+   // TARGET ZONE VALIDATION
+   // --------------------------------------------------
+
    if(!PFLS_ZonesReady)
    {
       Print("PFLS: Target zones unavailable. Retaining setup.");
@@ -272,6 +379,10 @@ void PFLS_ProcessEntry()
       targetZone.upper
    );
 
+   // --------------------------------------------------
+   // SIGNAL ONLY MODE
+   // --------------------------------------------------
+
    if(!PFLS_EnableExecution)
    {
       Print(
@@ -284,7 +395,10 @@ void PFLS_ProcessEntry()
       return;
    }
 
-   // Execution v1.60: exactly four arguments.
+   // --------------------------------------------------
+   // TRADE EXECUTION
+   // --------------------------------------------------
+
    bool tradeDecision = PFLS_ExecutionTryTrade(
       isBuy,
       entryZone,
@@ -308,7 +422,9 @@ int OnInit()
 {
    if(LookbackBars < 50 ||
       PivotStrength < 1 ||
-      ScanIntervalSeconds < 5)
+      ScanIntervalSeconds < 5 ||
+      MinimumHTFVotes < 1 ||
+      MinimumHTFVotes > PFLS_HTF_COUNT)
    {
       Print("PFLS ERROR: Invalid engine settings.");
       return INIT_PARAMETERS_INCORRECT;
@@ -323,9 +439,11 @@ int OnInit()
    }
 
    Print("======================================");
-   Print("PFLS TRADER ENGINE v1.72");
+   Print("PFLS TRADER ENGINE v1.80");
    Print("Symbol: ", _Symbol);
    Print("Timeframes: 8");
+   Print("Structure timeframes: 5");
+   Print("Minimum structure votes: ", MinimumHTFVotes);
    Print("Execution enabled: ", PFLS_EnableExecution);
    Print("======================================");
 
@@ -361,7 +479,7 @@ void OnDeinit(const int reason)
    EventKillTimer();
 
    Print(
-      "PFLS ENGINE v1.72 stopped. Reason: ",
+      "PFLS ENGINE v1.80 stopped. Reason: ",
       reason
    );
 }
