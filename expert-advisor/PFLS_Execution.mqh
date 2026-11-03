@@ -7,9 +7,9 @@
 
 // =====================================================
 // PFLS TRADER - EXECUTION MODULE
-// Version 1.60
+// Version 1.61
 // TICK-BASED M5 REJECTION + BREAKOUT
-// EXPLICIT PENDING SIGNAL MONITORING
+// IMPROVED PENDING SIGNAL VALIDATION
 // =====================================================
 
 // -----------------------------------------------------
@@ -91,31 +91,17 @@ void PFLS_ExecutionResetPending()
 
 // =====================================================
 // CHECK FOR ACTIVE PENDING SIGNAL
-// Used by Engine v1.70.
+// Timestamp-based tracking.
+// Actual validation occurs inside signal engine.
 // =====================================================
 
 bool PFLS_ExecutionHasPendingSignal()
 {
-   if(PFLS_PendingRejectionTime <= 0)
-      return false;
-
-   if(PFLS_PendingBuy == PFLS_PendingSell)
-      return false;
-
-   if(PFLS_PendingRejectionHigh <=
-      PFLS_PendingRejectionLow)
-      return false;
-
-   if(!PFLS_PendingEntryZone.valid ||
-      PFLS_PendingEntryZone.invalidated)
-      return false;
-
-   return true;
+   return (PFLS_PendingRejectionTime > 0);
 }
 
 // =====================================================
 // CONSUME CONFIRMED SIGNAL
-// Called by Engine after its decision.
 // =====================================================
 
 void PFLS_ExecutionConsumeSignal(datetime signalTime)
@@ -171,9 +157,6 @@ bool PFLS_ExecutionIsBearishRejection(MqlRates &candle)
 
 // =====================================================
 // M5 SIGNAL ENGINE
-//
-// Detects rejection at a valid M5 zone.
-// Requires breakout during immediately following M5 bar.
 // =====================================================
 
 bool PFLS_ExecutionGetM5Signal(
@@ -207,6 +190,40 @@ bool PFLS_ExecutionGetM5Signal(
 
    if(PFLS_PendingRejectionTime > 0)
    {
+      // Validate pending setup before monitoring.
+      bool invalidPending =
+         PFLS_PendingBuy == PFLS_PendingSell ||
+         PFLS_PendingRejectionHigh <=
+            PFLS_PendingRejectionLow ||
+         !PFLS_PendingEntryZone.valid ||
+         PFLS_PendingEntryZone.invalidated;
+
+      if(PFLS_PendingBuy &&
+         !PFLS_PendingEntryZone.isDemand)
+      {
+         invalidPending = true;
+      }
+
+      if(PFLS_PendingSell &&
+         PFLS_PendingEntryZone.isDemand)
+      {
+         invalidPending = true;
+      }
+
+      if(invalidPending)
+      {
+         Print(
+            "PFLS: Invalid pending setup detected. Resetting."
+         );
+
+         PFLS_LastProcessedRejectionBar =
+            PFLS_PendingRejectionTime;
+
+         PFLS_ExecutionResetPending();
+
+         return false;
+      }
+
       datetime expectedBreakoutBar =
          PFLS_PendingRejectionTime + periodSeconds;
 
@@ -223,7 +240,7 @@ bool PFLS_ExecutionGetM5Signal(
          return false;
       }
 
-      // Wait until the exact next M5 candle.
+      // Wait for exact next M5 candle.
       if(currentBarOpen != expectedBreakoutBar)
          return false;
 
