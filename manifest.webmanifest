@@ -11,10 +11,12 @@
     "standalone",
     "minimal-ui"
   ],
+  "prefer_related_applications": false,
   "orientation": "portrait",
   "background_color": "#080d18",
   "theme_color": "#080d18",
   "lang": "en",
+  "dir": "ltr",
   "categories": [
     "finance",
     "education",
