@@ -5,36 +5,52 @@
 #include "PFLS_Zones.mqh"
 #include <Trade/Trade.mqh>
 
-// ============================================
-// PFLS EXECUTION MODULE
-// Version 1.20
-// DEVELOPMENT BUILD
-// ============================================
+// =====================================================
+// PFLS TRADER - EXECUTION MODULE
+// Version 1.30
+// M5 REJECTION + BREAKOUT CONFIRMATION
+// =====================================================
 
-// Execution OFF by default.
+// -----------------------------------------------------
+// EXECUTION SETTINGS
+// -----------------------------------------------------
+
 input bool PFLS_EnableExecution = false;
 input bool PFLS_EmergencyStop = false;
 
-// Fixed trading configuration.
 input double PFLS_FixedLots = 0.01;
 input double PFLS_MaxRiskPercent = 3.0;
 input int PFLS_MaxTradesPerDay = 2;
 
-// Unique EA identifier.
 input ulong PFLS_MagicNumber = 751103;
 
-// Stop-loss buffer.
 input int PFLS_StopBufferPoints = 20;
 
-// Trade object.
+// -----------------------------------------------------
+// TRADE OBJECT
+// -----------------------------------------------------
+
 CTrade PFLS_Trade;
 
-// Last attempted execution candle.
+// -----------------------------------------------------
+// SIGNAL TRACKING
+// -----------------------------------------------------
+
 datetime PFLS_LastExecutionBar = 0;
 
-// ============================================
+datetime PFLS_LastProcessedRejectionBar = 0;
+
+datetime PFLS_PendingRejectionTime = 0;
+
+double PFLS_PendingRejectionHigh = 0.0;
+double PFLS_PendingRejectionLow = 0.0;
+
+bool PFLS_PendingBuy = false;
+bool PFLS_PendingSell = false;
+
+// =====================================================
 // PRICE NORMALIZATION
-// ============================================
+// =====================================================
 
 double PFLS_NormalizeTradePrice(double price)
 {
@@ -57,9 +73,83 @@ double PFLS_NormalizeTradePrice(double price)
    return NormalizeDouble(normalized, digits);
 }
 
-// ============================================
-// M5 CANDLE CONFIRMATION
-// ============================================
+// =====================================================
+// RESET PENDING REJECTION
+// =====================================================
+
+void PFLS_ExecutionResetPending()
+{
+   PFLS_PendingRejectionTime = 0;
+
+   PFLS_PendingRejectionHigh = 0.0;
+   PFLS_PendingRejectionLow = 0.0;
+
+   PFLS_PendingBuy = false;
+   PFLS_PendingSell = false;
+}
+
+// =====================================================
+// M5 REJECTION CANDLE VALIDATION
+// =====================================================
+
+bool PFLS_ExecutionIsBullishRejection(
+   MqlRates &candle
+)
+{
+   double body = MathAbs(
+      candle.close - candle.open
+   );
+
+   double lowerWick =
+      MathMin(candle.open, candle.close)
+      - candle.low;
+
+   if(body <= 0.0)
+      return false;
+
+   return (
+      candle.close > candle.open &&
+      lowerWick >= body * 0.5
+   );
+}
+
+// -----------------------------------------------------
+
+bool PFLS_ExecutionIsBearishRejection(
+   MqlRates &candle
+)
+{
+   double body = MathAbs(
+      candle.close - candle.open
+   );
+
+   double upperWick =
+      candle.high -
+      MathMax(candle.open, candle.close);
+
+   if(body <= 0.0)
+      return false;
+
+   return (
+      candle.close < candle.open &&
+      upperWick >= body * 0.5
+   );
+}
+
+// =====================================================
+// M5 REJECTION + NEXT-CANDLE BREAKOUT
+//
+// Stage 1:
+// Find a completed rejection candle overlapping
+// a valid M5 demand or supply zone.
+//
+// Stage 2:
+// During the immediately following M5 candle,
+// wait for price to break the rejection high/low.
+//
+// BUY = Ask breaks above rejection high.
+// SELL = Bid breaks below rejection low.
+// =====================================================
 
 bool PFLS_ExecutionGetM5Signal(
    PFLSZoneRecord &demand,
@@ -82,54 +172,205 @@ bool PFLS_ExecutionGetM5Signal(
       1,
       candle
    ) != 1)
+   {
+      return false;
+   }
+
+   datetime currentBarOpen = iTime(
+      _Symbol,
+      PERIOD_M5,
+      0
+   );
+
+   if(currentBarOpen <= 0)
       return false;
 
-   signalBarTime = candle[0].time;
+   datetime rejectionTime = candle[0].time;
 
-   if(signalBarTime <= 0 ||
-      signalBarTime <= PFLS_LastExecutionBar)
+   int periodSeconds = PeriodSeconds(
+      PERIOD_M5
+   );
+
+   if(periodSeconds <= 0)
       return false;
+
+   // --------------------------------------------------
+   // CHECK EXISTING PENDING REJECTION
+   // --------------------------------------------------
+
+   if(PFLS_PendingRejectionTime > 0)
+   {
+      datetime expectedBreakoutBar =
+         PFLS_PendingRejectionTime + periodSeconds;
+
+      // The immediate next candle is still active.
+      if(currentBarOpen == expectedBreakoutBar)
+      {
+         MqlTick tick;
+
+         if(!SymbolInfoTick(_Symbol, tick))
+            return false;
+
+         // BUY BREAKOUT
+         if(PFLS_PendingBuy &&
+            tick.ask > PFLS_PendingRejectionHigh)
+         {
+            isBuy = true;
+
+            signalBarTime =
+               PFLS_PendingRejectionTime;
+
+            PFLS_LastProcessedRejectionBar =
+               PFLS_PendingRejectionTime;
+
+            Print(
+               "PFLS: BUY breakout confirmed. "
+               "Rejection high broken."
+            );
+
+            PFLS_ExecutionResetPending();
+
+            return true;
+         }
+
+         // SELL BREAKOUT
+         if(PFLS_PendingSell &&
+            tick.bid < PFLS_PendingRejectionLow)
+         {
+            isBuy = false;
+
+            signalBarTime =
+               PFLS_PendingRejectionTime;
+
+            PFLS_LastProcessedRejectionBar =
+               PFLS_PendingRejectionTime;
+
+            Print(
+               "PFLS: SELL breakout confirmed. "
+               "Rejection low broken."
+            );
+
+            PFLS_ExecutionResetPending();
+
+            return true;
+         }
+
+         // No breakout yet. Keep waiting.
+         return false;
+      }
+
+      // The next candle has ended without a breakout.
+      if(currentBarOpen > expectedBreakoutBar)
+      {
+         Print(
+            "PFLS: Rejection signal expired. "
+            "Next M5 candle did not break the level."
+         );
+
+         PFLS_LastProcessedRejectionBar =
+            PFLS_PendingRejectionTime;
+
+         PFLS_ExecutionResetPending();
+      }
+      else
+      {
+         return false;
+      }
+   }
+
+   // --------------------------------------------------
+   // PREVENT REPEATED REJECTION PROCESSING
+   // --------------------------------------------------
+
+   if(rejectionTime <= PFLS_LastProcessedRejectionBar)
+      return false;
+
+   if(rejectionTime <= PFLS_LastExecutionBar)
+      return false;
+
+   // --------------------------------------------------
+   // CHECK ZONE OVERLAP
+   // --------------------------------------------------
 
    bool overlapsDemand =
       demand.valid &&
       !demand.invalidated &&
+      demand.isDemand &&
       candle[0].low <= demand.upper &&
       candle[0].high >= demand.lower;
 
    bool overlapsSupply =
       supply.valid &&
       !supply.invalidated &&
+      !supply.isDemand &&
       candle[0].high >= supply.lower &&
       candle[0].low <= supply.upper;
 
-   bool bullish =
-      candle[0].close > candle[0].open;
-
-   bool bearish =
-      candle[0].close < candle[0].open;
-
+   // Do not accept an ambiguous candle.
    if(overlapsDemand && overlapsSupply)
       return false;
 
-   if(overlapsDemand && bullish)
+   // --------------------------------------------------
+   // IDENTIFY BULLISH REJECTION AT DEMAND
+   // --------------------------------------------------
+
+   if(overlapsDemand &&
+      PFLS_ExecutionIsBullishRejection(candle[0]))
    {
-      isBuy = true;
-      return true;
+      PFLS_PendingBuy = true;
+      PFLS_PendingSell = false;
+
+      PFLS_PendingRejectionTime =
+         rejectionTime;
+
+      PFLS_PendingRejectionHigh =
+         candle[0].high;
+
+      PFLS_PendingRejectionLow =
+         candle[0].low;
+
+      Print(
+         "PFLS: M5 bullish rejection recorded. "
+         "Waiting for next-candle high breakout."
+      );
+
+      return false;
    }
 
-   if(overlapsSupply && bearish)
+   // --------------------------------------------------
+   // IDENTIFY BEARISH REJECTION AT SUPPLY
+   // --------------------------------------------------
+
+   if(overlapsSupply &&
+      PFLS_ExecutionIsBearishRejection(candle[0]))
    {
-      isBuy = false;
-      return true;
+      PFLS_PendingSell = true;
+      PFLS_PendingBuy = false;
+
+      PFLS_PendingRejectionTime =
+         rejectionTime;
+
+      PFLS_PendingRejectionHigh =
+         candle[0].high;
+
+      PFLS_PendingRejectionLow =
+         candle[0].low;
+
+      Print(
+         "PFLS: M5 bearish rejection recorded. "
+         "Waiting for next-candle low breakout."
+      );
+
+      return false;
    }
 
    return false;
 }
 
-// ============================================
+// =====================================================
 // COUNT DISTINCT ENTRY ORDERS TODAY
-// Uses broker server time.
-// ============================================
+// Broker server time.
+// =====================================================
 
 int PFLS_ExecutionCountToday()
 {
@@ -147,7 +388,8 @@ int PFLS_ExecutionCountToday()
    dateParts.min = 0;
    dateParts.sec = 0;
 
-   datetime dayStart = StructToTime(dateParts);
+   datetime dayStart =
+      StructToTime(dateParts);
 
    if(!HistorySelect(dayStart, now))
       return -1;
@@ -167,13 +409,17 @@ int PFLS_ExecutionCountToday()
          deal,
          DEAL_SYMBOL
       ) != _Symbol)
+      {
          continue;
+      }
 
       if((ulong)HistoryDealGetInteger(
          deal,
          DEAL_MAGIC
       ) != PFLS_MagicNumber)
+      {
          continue;
+      }
 
       ENUM_DEAL_ENTRY entry =
          (ENUM_DEAL_ENTRY)HistoryDealGetInteger(
@@ -183,7 +429,9 @@ int PFLS_ExecutionCountToday()
 
       if(entry != DEAL_ENTRY_IN &&
          entry != DEAL_ENTRY_INOUT)
+      {
          continue;
+      }
 
       ulong orderTicket =
          (ulong)HistoryDealGetInteger(
@@ -207,8 +455,14 @@ int PFLS_ExecutionCountToday()
 
       if(!alreadyCounted)
       {
-         ArrayResize(countedOrders, orderCount + 1);
-         countedOrders[orderCount] = orderTicket;
+         ArrayResize(
+            countedOrders,
+            orderCount + 1
+         );
+
+         countedOrders[orderCount] =
+            orderTicket;
+
          orderCount++;
       }
    }
@@ -216,10 +470,9 @@ int PFLS_ExecutionCountToday()
    return orderCount;
 }
 
-// ============================================
+// =====================================================
 // ONE POSITION AT A TIME ON THIS SYMBOL
-// Includes manual and other EA positions.
-// ============================================
+// =====================================================
 
 bool PFLS_ExecutionHasOpenPosition()
 {
@@ -240,9 +493,9 @@ bool PFLS_ExecutionHasOpenPosition()
    return false;
 }
 
-// ============================================
+// =====================================================
 // FIXED VOLUME VALIDATION
-// ============================================
+// =====================================================
 
 bool PFLS_ExecutionValidateVolume()
 {
@@ -265,25 +518,33 @@ bool PFLS_ExecutionValidateVolume()
       PFLS_FixedLots < minimum ||
       PFLS_FixedLots > maximum)
    {
-      Print("PFLS: Fixed 0.01 lot is not permitted.");
+      Print(
+         "PFLS: Fixed 0.01 lot is not permitted."
+      );
+
       return false;
    }
 
    double validVolume =
       MathRound(PFLS_FixedLots / step) * step;
 
-   if(MathAbs(validVolume - PFLS_FixedLots) > 0.0000001)
+   if(MathAbs(
+      validVolume - PFLS_FixedLots
+   ) > 0.0000001)
    {
-      Print("PFLS: Fixed lot does not match volume step.");
+      Print(
+         "PFLS: Fixed lot does not match volume step."
+      );
+
       return false;
    }
 
    return true;
 }
 
-// ============================================
+// =====================================================
 // TRADING PERMISSIONS
-// ============================================
+// =====================================================
 
 bool PFLS_ExecutionPermissions()
 {
@@ -302,29 +563,9 @@ bool PFLS_ExecutionPermissions()
    return true;
 }
 
-// ============================================
-// VERIFY CURRENT PRICE IS IN ENTRY ZONE
-// ============================================
-
-bool PFLS_ExecutionPriceInsideZone(
-   PFLSZoneRecord &zone,
-   MqlTick &tick
-)
-{
-   double midpoint = (tick.bid + tick.ask) / 2.0;
-
-   if(midpoint < zone.lower || midpoint > zone.upper)
-   {
-      Print("PFLS: Entry rejected. Price has left the zone.");
-      return false;
-   }
-
-   return true;
-}
-
-// ============================================
+// =====================================================
 // MAIN EXECUTION FUNCTION
-// ============================================
+// =====================================================
 
 bool PFLS_ExecutionTryTrade(
    bool isBuy,
@@ -333,29 +574,48 @@ bool PFLS_ExecutionTryTrade(
    datetime signalBarTime
 )
 {
+   // --------------------------------------------------
    // EXECUTION SWITCH
+   // --------------------------------------------------
 
    if(!PFLS_EnableExecution)
       return false;
 
+   // --------------------------------------------------
    // EMERGENCY STOP
+   // --------------------------------------------------
 
    if(PFLS_EmergencyStop)
    {
-      Print("PFLS: EMERGENCY STOP ACTIVE.");
+      Print(
+         "PFLS: EMERGENCY STOP ACTIVE."
+      );
+
       return false;
    }
 
-   // TRADING PERMISSIONS
+   // --------------------------------------------------
+   // PERMISSIONS
+   // --------------------------------------------------
 
    if(!PFLS_ExecutionPermissions())
-      return false;
+   {
+      Print(
+         "PFLS: Trading permissions unavailable."
+      );
 
+      return false;
+   }
+
+   // --------------------------------------------------
    // CONFIGURATION VALIDATION
+   // --------------------------------------------------
 
    if(signalBarTime <= 0 ||
       signalBarTime <= PFLS_LastExecutionBar)
+   {
       return false;
+   }
 
    if(PFLS_FixedLots != 0.01 ||
       PFLS_MaxRiskPercent <= 0.0 ||
@@ -364,70 +624,105 @@ bool PFLS_ExecutionTryTrade(
       PFLS_MaxTradesPerDay > 2 ||
       PFLS_StopBufferPoints < 1)
    {
-      Print("PFLS: Unsafe execution configuration.");
+      Print(
+         "PFLS: Unsafe execution configuration."
+      );
+
       return false;
    }
 
+   // --------------------------------------------------
    // VALIDATE ZONES
+   // --------------------------------------------------
 
    if(!entryZone.valid ||
       !targetZone.valid ||
       entryZone.invalidated ||
       targetZone.invalidated)
    {
-      Print("PFLS: Invalid entry or target zone.");
+      Print(
+         "PFLS: Invalid entry or target zone."
+      );
+
       return false;
    }
 
    if(isBuy)
    {
-      if(!entryZone.isDemand || targetZone.isDemand)
+      if(!entryZone.isDemand ||
+         targetZone.isDemand)
+      {
          return false;
+      }
    }
    else
    {
-      if(entryZone.isDemand || !targetZone.isDemand)
+      if(entryZone.isDemand ||
+         !targetZone.isDemand)
+      {
          return false;
+      }
    }
 
+   // --------------------------------------------------
    // POSITION LIMIT
+   // --------------------------------------------------
 
    if(PFLS_ExecutionHasOpenPosition())
    {
-      Print("PFLS: Existing position blocks new entry.");
+      Print(
+         "PFLS: Existing position blocks new entry."
+      );
+
       return false;
    }
 
+   // --------------------------------------------------
    // DAILY TRADE LIMIT
+   // --------------------------------------------------
 
-   int dailyTrades = PFLS_ExecutionCountToday();
+   int dailyTrades =
+      PFLS_ExecutionCountToday();
 
    if(dailyTrades < 0)
    {
-      Print("PFLS: Unable to verify daily trade count.");
+      Print(
+         "PFLS: Unable to verify daily trade count."
+      );
+
       return false;
    }
 
    if(dailyTrades >= PFLS_MaxTradesPerDay)
    {
-      Print("PFLS: Daily trade limit reached.");
+      Print(
+         "PFLS: Daily trade limit reached."
+      );
+
       return false;
    }
 
-   // FIXED VOLUME
+   // --------------------------------------------------
+   // VOLUME VALIDATION
+   // --------------------------------------------------
 
    if(!PFLS_ExecutionValidateVolume())
       return false;
 
-   // CURRENT PRICE
+   // --------------------------------------------------
+   // CURRENT MARKET PRICE
+   // --------------------------------------------------
 
    MqlTick tick;
 
    if(!SymbolInfoTick(_Symbol, tick))
       return false;
 
-   if(tick.bid <= 0.0 || tick.ask <= 0.0)
+   if(tick.bid <= 0.0 ||
+      tick.ask <= 0.0)
+   {
       return false;
+   }
 
    double point = SymbolInfoDouble(
       _Symbol,
@@ -437,15 +732,15 @@ bool PFLS_ExecutionTryTrade(
    if(point <= 0.0)
       return false;
 
-   if(!PFLS_ExecutionPriceInsideZone(entryZone, tick))
-      return false;
+   double entryPrice =
+      isBuy ? tick.ask : tick.bid;
 
-   double entryPrice = isBuy ? tick.ask : tick.bid;
+   double stopLoss = 0.0;
+   double takeProfit = 0.0;
 
-   double stopLoss;
-   double takeProfit;
-
-   // BUY LEVELS
+   // --------------------------------------------------
+   // BUY PRICE STRUCTURE
+   // --------------------------------------------------
 
    if(isBuy)
    {
@@ -458,14 +753,20 @@ bool PFLS_ExecutionTryTrade(
       if(stopLoss >= entryPrice ||
          takeProfit <= entryPrice)
       {
-         Print("PFLS: Invalid BUY price structure.");
+         Print(
+            "PFLS: Invalid BUY price structure."
+         );
+
          return false;
       }
    }
+
+   // --------------------------------------------------
+   // SELL PRICE STRUCTURE
+   // --------------------------------------------------
+
    else
    {
-      // SELL LEVELS
-
       stopLoss =
          entryZone.upper +
          PFLS_StopBufferPoints * point;
@@ -475,25 +776,41 @@ bool PFLS_ExecutionTryTrade(
       if(stopLoss <= entryPrice ||
          takeProfit >= entryPrice)
       {
-         Print("PFLS: Invalid SELL price structure.");
+         Print(
+            "PFLS: Invalid SELL price structure."
+         );
+
          return false;
       }
    }
 
-   // NORMALIZE PRICES
+   // --------------------------------------------------
+   // NORMALIZE LEVELS
+   // --------------------------------------------------
 
-   stopLoss = PFLS_NormalizeTradePrice(stopLoss);
-   takeProfit = PFLS_NormalizeTradePrice(takeProfit);
+   stopLoss =
+      PFLS_NormalizeTradePrice(stopLoss);
 
-   if(isBuy && (stopLoss >= entryPrice ||
-                takeProfit <= entryPrice))
+   takeProfit =
+      PFLS_NormalizeTradePrice(takeProfit);
+
+   if(isBuy &&
+      (stopLoss >= entryPrice ||
+       takeProfit <= entryPrice))
+   {
       return false;
+   }
 
-   if(!isBuy && (stopLoss <= entryPrice ||
-                 takeProfit >= entryPrice))
+   if(!isBuy &&
+      (stopLoss <= entryPrice ||
+       takeProfit >= entryPrice))
+   {
       return false;
+   }
 
+   // --------------------------------------------------
    // BROKER STOP DISTANCE
+   // --------------------------------------------------
 
    long stopsLevel = SymbolInfoInteger(
       _Symbol,
@@ -510,16 +827,26 @@ bool PFLS_ExecutionTryTrade(
       freezeLevel
    );
 
-   double minimumDistance = requiredLevel * point;
+   double minimumDistance =
+      requiredLevel * point;
 
-   if(MathAbs(entryPrice - stopLoss) < minimumDistance ||
-      MathAbs(takeProfit - entryPrice) < minimumDistance)
+   if(MathAbs(
+      entryPrice - stopLoss
+   ) < minimumDistance ||
+      MathAbs(
+      takeProfit - entryPrice
+   ) < minimumDistance)
    {
-      Print("PFLS: Broker stop/freeze distance not met.");
+      Print(
+         "PFLS: Broker stop/freeze distance not met."
+      );
+
       return false;
    }
 
+   // --------------------------------------------------
    // CASH RISK CALCULATION
+   // --------------------------------------------------
 
    double estimatedLoss = 0.0;
 
@@ -535,13 +862,17 @@ bool PFLS_ExecutionTryTrade(
       estimatedLoss
    ))
    {
-      Print("PFLS: Risk calculation failed.");
+      Print(
+         "PFLS: Risk calculation failed."
+      );
+
       return false;
    }
 
    estimatedLoss = MathAbs(estimatedLoss);
 
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity =
+      AccountInfoDouble(ACCOUNT_EQUITY);
 
    if(equity <= 0.0)
       return false;
@@ -551,11 +882,16 @@ bool PFLS_ExecutionTryTrade(
 
    if(estimatedLoss > maximumLoss)
    {
-      Print("PFLS: Estimated loss exceeds risk limit.");
+      Print(
+         "PFLS: Estimated loss exceeds risk limit."
+      );
+
       return false;
    }
 
+   // --------------------------------------------------
    // FREE MARGIN VALIDATION
+   // --------------------------------------------------
 
    double requiredMargin = 0.0;
 
@@ -567,29 +903,48 @@ bool PFLS_ExecutionTryTrade(
       requiredMargin
    ))
    {
-      Print("PFLS: Margin calculation failed.");
+      Print(
+         "PFLS: Margin calculation failed."
+      );
+
       return false;
    }
 
    if(requiredMargin >
       AccountInfoDouble(ACCOUNT_MARGIN_FREE))
    {
-      Print("PFLS: Insufficient free margin.");
+      Print(
+         "PFLS: Insufficient free margin."
+      );
+
       return false;
    }
 
-   // PREPARE ORDER
+   // --------------------------------------------------
+   // PREPARE TRADE
+   // --------------------------------------------------
 
-   PFLS_Trade.SetExpertMagicNumber(PFLS_MagicNumber);
+   PFLS_Trade.SetExpertMagicNumber(
+      PFLS_MagicNumber
+   );
+
    PFLS_Trade.SetDeviationInPoints(20);
 
    if(!PFLS_Trade.SetTypeFillingBySymbol(_Symbol))
    {
-      Print("PFLS: Filling mode unavailable.");
+      Print(
+         "PFLS: Filling mode unavailable."
+      );
+
       return false;
    }
 
-   // Prevent repeated attempts on the same candle.
+   // --------------------------------------------------
+   // SUBMIT ORDER
+   // --------------------------------------------------
+
+   // Record the signal before sending so a rejected
+   // order cannot repeatedly trigger on the same setup.
 
    PFLS_LastExecutionBar = signalBarTime;
 
@@ -603,7 +958,7 @@ bool PFLS_ExecutionTryTrade(
          0.0,
          stopLoss,
          takeProfit,
-         "PFLS Automatic BUY"
+         "PFLS M5 BUY Breakout"
       );
    }
    else
@@ -614,21 +969,26 @@ bool PFLS_ExecutionTryTrade(
          0.0,
          stopLoss,
          takeProfit,
-         "PFLS Automatic SELL"
+         "PFLS M5 SELL Breakout"
       );
    }
 
-   // SERVER RESPONSE
+   // --------------------------------------------------
+   // VERIFY SERVER RESPONSE
+   // --------------------------------------------------
 
-   uint resultCode = PFLS_Trade.ResultRetcode();
+   uint resultCode =
+      PFLS_Trade.ResultRetcode();
 
-   if(!submitted ||
-      (resultCode != TRADE_RETCODE_DONE &&
-       resultCode != TRADE_RETCODE_PLACED &&
-       resultCode != TRADE_RETCODE_DONE_PARTIAL))
+   bool accepted =
+      resultCode == TRADE_RETCODE_DONE ||
+      resultCode == TRADE_RETCODE_PLACED ||
+      resultCode == TRADE_RETCODE_DONE_PARTIAL;
+
+   if(!submitted || !accepted)
    {
       Print(
-         "PFLS: Order not confirmed. ",
+         "PFLS: Order not confirmed. Code: ",
          resultCode,
          " | ",
          PFLS_Trade.ResultRetcodeDescription()
@@ -638,17 +998,35 @@ bool PFLS_ExecutionTryTrade(
    }
 
    Print(
-      "PFLS: Order response accepted. ",
-      isBuy ? "BUY" : "SELL",
-      " | Lots: ",
-      DoubleToString(PFLS_FixedLots, 2),
-      " | SL: ",
-      DoubleToString(stopLoss, _Digits),
-      " | TP: ",
+      "PFLS: Order accepted by trade server."
+   );
+
+   Print(
+      "Direction: ",
+      isBuy ? "BUY" : "SELL"
+   );
+
+   Print(
+      "Lots: ",
+      DoubleToString(PFLS_FixedLots, 2)
+   );
+
+   Print(
+      "Stop Loss: ",
+      DoubleToString(stopLoss, _Digits)
+   );
+
+   Print(
+      "Take Profit: ",
       DoubleToString(takeProfit, _Digits)
    );
 
    return true;
 }
 
-#endif
+// =====================================================
+// END OF PFLS EXECUTION MODULE
+// VERSION 1.30
+// =====================================================
+
+#endif // PFLS_EXECUTION_MQH
