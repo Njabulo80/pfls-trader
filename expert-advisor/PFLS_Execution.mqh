@@ -7,9 +7,9 @@
 
 // =====================================================
 // PFLS TRADER - EXECUTION MODULE
-// Version 1.61
+// Version 1.62
 // TICK-BASED M5 REJECTION + BREAKOUT
-// IMPROVED PENDING SIGNAL VALIDATION
+// CONTROLLED RETRY HANDLING
 // =====================================================
 
 // -----------------------------------------------------
@@ -46,6 +46,12 @@ bool PFLS_PendingSell = false;
 bool PFLS_PendingBreakoutConfirmed = false;
 
 PFLSZoneRecord PFLS_PendingEntryZone;
+
+// Retry tracking
+datetime PFLS_LastTradeAttemptTime = 0;
+datetime PFLS_LastTradeAttemptBar = 0;
+
+#define PFLS_RETRY_INTERVAL_SECONDS 2
 
 // =====================================================
 // PRICE NORMALIZATION
@@ -91,8 +97,6 @@ void PFLS_ExecutionResetPending()
 
 // =====================================================
 // CHECK FOR ACTIVE PENDING SIGNAL
-// Timestamp-based tracking.
-// Actual validation occurs inside signal engine.
 // =====================================================
 
 bool PFLS_ExecutionHasPendingSignal()
@@ -190,7 +194,6 @@ bool PFLS_ExecutionGetM5Signal(
 
    if(PFLS_PendingRejectionTime > 0)
    {
-      // Validate pending setup before monitoring.
       bool invalidPending =
          PFLS_PendingBuy == PFLS_PendingSell ||
          PFLS_PendingRejectionHigh <=
@@ -227,7 +230,6 @@ bool PFLS_ExecutionGetM5Signal(
       datetime expectedBreakoutBar =
          PFLS_PendingRejectionTime + periodSeconds;
 
-      // Expire after the immediate next M5 candle.
       if(currentBarOpen > expectedBreakoutBar)
       {
          Print("PFLS: Pending M5 rejection expired.");
@@ -240,7 +242,6 @@ bool PFLS_ExecutionGetM5Signal(
          return false;
       }
 
-      // Wait for exact next M5 candle.
       if(currentBarOpen != expectedBreakoutBar)
          return false;
 
@@ -552,6 +553,36 @@ bool PFLS_ExecutionPermissions()
 }
 
 // =====================================================
+// RETRY INTERVAL VALIDATION
+// =====================================================
+
+bool PFLS_ExecutionRetryAllowed(datetime signalBarTime)
+{
+   datetime now = TimeCurrent();
+
+   if(now <= 0)
+      return false;
+
+   // A different signal receives its own retry interval.
+   if(PFLS_LastTradeAttemptBar != signalBarTime)
+   {
+      PFLS_LastTradeAttemptBar = signalBarTime;
+      PFLS_LastTradeAttemptTime = 0;
+   }
+
+   if(PFLS_LastTradeAttemptTime > 0 &&
+      now - PFLS_LastTradeAttemptTime <
+         PFLS_RETRY_INTERVAL_SECONDS)
+   {
+      return false;
+   }
+
+   PFLS_LastTradeAttemptTime = now;
+
+   return true;
+}
+
+// =====================================================
 // MAIN EXECUTION FUNCTION
 // =====================================================
 
@@ -812,6 +843,13 @@ bool PFLS_ExecutionTryTrade(
    }
 
    // --------------------------------------------------
+   // CONTROLLED RETRY CHECK
+   // --------------------------------------------------
+
+   if(!PFLS_ExecutionRetryAllowed(signalBarTime))
+      return false;
+
+   // --------------------------------------------------
    // SUBMIT ORDER
    // --------------------------------------------------
 
@@ -823,9 +861,6 @@ bool PFLS_ExecutionTryTrade(
       Print("PFLS: Filling mode unavailable.");
       return false;
    }
-
-   // Prevent duplicate submissions for this signal.
-   PFLS_LastExecutionBar = signalBarTime;
 
    bool submitted = false;
 
@@ -865,11 +900,20 @@ bool PFLS_ExecutionTryTrade(
          "PFLS: Order not confirmed. Code: ",
          resultCode,
          " | ",
-         PFLS_Trade.ResultRetcodeDescription()
+         PFLS_Trade.ResultRetcodeDescription(),
+         " | Signal remains eligible for retry."
       );
 
+      // IMPORTANT:
+      // Do not update PFLS_LastExecutionBar here.
       return false;
    }
+
+   // --------------------------------------------------
+   // ACCEPTED REQUEST
+   // --------------------------------------------------
+
+   PFLS_LastExecutionBar = signalBarTime;
 
    Print(
       "PFLS: Trade request accepted. Direction: ",
