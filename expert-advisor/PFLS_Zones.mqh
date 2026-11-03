@@ -6,10 +6,24 @@
 // PFLS TRADER - ZONE DETECTION MODULE
 // ============================================
 
+// Zone interaction states
+enum ENUM_PFLS_ZONE_STATE
+{
+   PFLS_ZONE_APPROACHING,
+   PFLS_ZONE_INSIDE,
+   PFLS_ZONE_DEPARTED
+};
+
+// ============================================
+// ZONE RECORD
+// ============================================
+
 struct PFLSZoneRecord
 {
    bool valid;
    bool isDemand;
+
+   ENUM_PFLS_ZONE_STATE zoneState;
 
    double lower;
    double upper;
@@ -30,6 +44,8 @@ void PFLSZ_Reset(PFLSZoneRecord &zone)
 {
    zone.valid = false;
    zone.isDemand = false;
+
+   zone.zoneState = PFLS_ZONE_APPROACHING;
 
    zone.lower = 0.0;
    zone.upper = 0.0;
@@ -114,32 +130,27 @@ void PFLSZ_CheckZoneHistory(
 
    bool wasInsideZone = false;
 
-   // Scan from the pivot candle towards the
-   // most recent closed candle.
    for(int j = pivotIndex - 1; j >= 0; j--)
    {
       bool overlaps =
          rates[j].high >= zone.lower &&
          rates[j].low <= zone.upper;
 
-      // Demand invalidation:
-      // candle closes below the lower boundary.
+      // Demand invalidation
       if(zone.isDemand && rates[j].close < zone.lower)
       {
          zone.invalidated = true;
          return;
       }
 
-      // Supply invalidation:
-      // candle closes above the upper boundary.
+      // Supply invalidation
       if(!zone.isDemand && rates[j].close > zone.upper)
       {
          zone.invalidated = true;
          return;
       }
 
-      // Count a touch only when price enters
-      // after previously being outside.
+      // Count distinct entries
       if(overlaps && !wasInsideZone)
       {
          zone.touches++;
@@ -147,6 +158,40 @@ void PFLSZ_CheckZoneHistory(
 
       wasInsideZone = overlaps;
    }
+}
+
+// ============================================
+// UPDATE CURRENT ZONE STATE
+// ============================================
+
+void PFLSZ_UpdateZoneState(
+   PFLSZoneRecord &zone,
+   double currentPrice
+)
+{
+   if(!zone.valid || currentPrice <= 0.0)
+      return;
+
+   // Price currently inside the zone
+   if(currentPrice >= zone.lower &&
+      currentPrice <= zone.upper)
+   {
+      zone.zoneState = PFLS_ZONE_INSIDE;
+      return;
+   }
+
+   // Price is below a demand zone
+   // or above a supply zone.
+   if((zone.isDemand && currentPrice < zone.lower) ||
+      (!zone.isDemand && currentPrice > zone.upper))
+   {
+      zone.zoneState = PFLS_ZONE_APPROACHING;
+      return;
+   }
+
+   // Price has moved beyond the opposite
+   // boundary after interacting with the zone.
+   zone.zoneState = PFLS_ZONE_DEPARTED;
 }
 
 // ============================================
@@ -166,10 +211,14 @@ bool PFLSZ_DetectNearestZones(
    PFLSZ_Reset(demand);
    PFLSZ_Reset(supply);
 
-   if(lookback < 20 || strength < 1 || currentPrice <= 0.0)
+   if(lookback < 20 ||
+      strength < 1 ||
+      currentPrice <= 0.0)
+   {
       return false;
+   }
 
-   // Get and validate the instrument point size.
+   // Validate instrument point size
    double pointSize = SymbolInfoDouble(
       symbol,
       SYMBOL_POINT
@@ -239,10 +288,25 @@ bool PFLSZ_DetectNearestZones(
             !candidate.invalidated &&
             candidate.upper < currentPrice;
 
+         // Also recognise demand zones
+         // when current price is inside them.
+         if(!candidate.invalidated &&
+            currentPrice >= candidate.lower &&
+            currentPrice <= candidate.upper)
+         {
+            candidate.valid = true;
+         }
+
          if(candidate.valid)
          {
             candidate.distancePoints =
-               (currentPrice - candidate.upper) / pointSize;
+               MathAbs(currentPrice - candidate.upper) /
+               pointSize;
+
+            PFLSZ_UpdateZoneState(
+               candidate,
+               currentPrice
+            );
 
             if(candidate.distancePoints < nearestDemandDistance)
             {
@@ -283,10 +347,25 @@ bool PFLSZ_DetectNearestZones(
             !candidate.invalidated &&
             candidate.lower > currentPrice;
 
+         // Also recognise supply zones
+         // when current price is inside them.
+         if(!candidate.invalidated &&
+            currentPrice >= candidate.lower &&
+            currentPrice <= candidate.upper)
+         {
+            candidate.valid = true;
+         }
+
          if(candidate.valid)
          {
             candidate.distancePoints =
-               (candidate.lower - currentPrice) / pointSize;
+               MathAbs(currentPrice - candidate.lower) /
+               pointSize;
+
+            PFLSZ_UpdateZoneState(
+               candidate,
+               currentPrice
+            );
 
             if(candidate.distancePoints < nearestSupplyDistance)
             {
@@ -324,7 +403,7 @@ bool PFLSZ_ZonesOverlap(
 
 // ============================================
 // ZONE FRESHNESS HEURISTIC
-// Not a probability of trade success.
+// NOT A PROBABILITY OF SUCCESS
 // ============================================
 
 double PFLSZ_FreshnessScore(PFLSZoneRecord &zone)
