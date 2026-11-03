@@ -6,8 +6,18 @@
 // PFLS TRADER
 // PRICE FLOW LADDER SEQUENCE
 // ZONE DETECTION MODULE
-// Version 1.30
+// Version 1.40
+//
+// Added:
+// - Confirmed market structure detection
+// - Higher High / Higher Low detection
+// - Lower High / Lower Low detection
+// - Bullish / Bearish / Neutral directional bias
 // =====================================================
+
+// -----------------------------------------------------
+// ZONE STATE
+// -----------------------------------------------------
 
 enum ENUM_PFLS_ZONE_STATE
 {
@@ -16,6 +26,21 @@ enum ENUM_PFLS_ZONE_STATE
    PFLS_ZONE_DEPARTED,
    PFLS_ZONE_UNTESTED
 };
+
+// -----------------------------------------------------
+// MARKET STRUCTURE BIAS
+// -----------------------------------------------------
+
+enum ENUM_PFLS_MARKET_BIAS
+{
+   PFLS_BIAS_BEARISH = -1,
+   PFLS_BIAS_NEUTRAL = 0,
+   PFLS_BIAS_BULLISH = 1
+};
+
+// -----------------------------------------------------
+// ZONE RECORD
+// -----------------------------------------------------
 
 struct PFLSZoneRecord
 {
@@ -44,6 +69,7 @@ void PFLSZ_Reset(PFLSZoneRecord &zone)
 {
    zone.valid          = false;
    zone.isDemand       = false;
+
    zone.zoneState      = PFLS_ZONE_UNTESTED;
 
    zone.lower          = 0.0;
@@ -127,6 +153,160 @@ bool PFLSZ_IsPivotHigh(
 }
 
 // =====================================================
+// MARKET STRUCTURE DETECTOR
+//
+// Compares the two most recent confirmed swing highs
+// and the two most recent confirmed swing lows.
+//
+// BULLISH:
+// Latest high > previous high
+// AND
+// Latest low > previous low
+//
+// BEARISH:
+// Latest high < previous high
+// AND
+// Latest low < previous low
+//
+// Otherwise NEUTRAL.
+//
+// This is a structural classification, not a prediction.
+// =====================================================
+
+ENUM_PFLS_MARKET_BIAS PFLSZ_DetectMarketStructure(
+   string symbol,
+   ENUM_TIMEFRAMES timeframe,
+   int lookback,
+   int strength
+)
+{
+   if(lookback < 30 || strength < 1)
+      return PFLS_BIAS_NEUTRAL;
+
+   MqlRates rates[];
+
+   ArraySetAsSeries(rates, true);
+
+   int copied = CopyRates(
+      symbol,
+      timeframe,
+      1,
+      lookback,
+      rates
+   );
+
+   if(copied < strength * 2 + 10)
+      return PFLS_BIAS_NEUTRAL;
+
+   // --------------------------------------------------
+   // SWING HIGH STORAGE
+   // --------------------------------------------------
+
+   double latestHigh = 0.0;
+   double previousHigh = 0.0;
+
+   int highCount = 0;
+
+   // --------------------------------------------------
+   // SWING LOW STORAGE
+   // --------------------------------------------------
+
+   double latestLow = 0.0;
+   double previousLow = 0.0;
+
+   int lowCount = 0;
+
+   // --------------------------------------------------
+   // SCAN CONFIRMED SWINGS
+   //
+   // Series indexing:
+   // Smaller index = more recent candle.
+   //
+   // Therefore the first two detected pivots of each
+   // type are the latest and previous confirmed swings.
+   // --------------------------------------------------
+
+   for(int i = strength;
+       i < copied - strength;
+       i++)
+   {
+      if(highCount < 2 &&
+         PFLSZ_IsPivotHigh(
+            rates,
+            i,
+            copied,
+            strength
+         ))
+      {
+         if(highCount == 0)
+            latestHigh = rates[i].high;
+         else
+            previousHigh = rates[i].high;
+
+         highCount++;
+      }
+
+      if(lowCount < 2 &&
+         PFLSZ_IsPivotLow(
+            rates,
+            i,
+            copied,
+            strength
+         ))
+      {
+         if(lowCount == 0)
+            latestLow = rates[i].low;
+         else
+            previousLow = rates[i].low;
+
+         lowCount++;
+      }
+
+      if(highCount >= 2 && lowCount >= 2)
+         break;
+   }
+
+   // --------------------------------------------------
+   // REQUIRE TWO CONFIRMED SWINGS OF EACH TYPE
+   // --------------------------------------------------
+
+   if(highCount < 2 || lowCount < 2)
+      return PFLS_BIAS_NEUTRAL;
+
+   // --------------------------------------------------
+   // BULLISH STRUCTURE
+   // --------------------------------------------------
+
+   bool higherHighs =
+      latestHigh > previousHigh;
+
+   bool higherLows =
+      latestLow > previousLow;
+
+   if(higherHighs && higherLows)
+      return PFLS_BIAS_BULLISH;
+
+   // --------------------------------------------------
+   // BEARISH STRUCTURE
+   // --------------------------------------------------
+
+   bool lowerHighs =
+      latestHigh < previousHigh;
+
+   bool lowerLows =
+      latestLow < previousLow;
+
+   if(lowerHighs && lowerLows)
+      return PFLS_BIAS_BEARISH;
+
+   // --------------------------------------------------
+   // MIXED OR UNCLEAR STRUCTURE
+   // --------------------------------------------------
+
+   return PFLS_BIAS_NEUTRAL;
+}
+
+// =====================================================
 // CHECK ZONE HISTORY
 // Counts separate visits and checks invalidation.
 // =====================================================
@@ -149,7 +329,6 @@ void PFLSZ_CheckZoneHistory(
 
    bool wasInside = false;
 
-   // Examine candles newer than the pivot.
    for(int i = pivotIndex - 1; i >= 0; i--)
    {
       bool overlaps =
@@ -179,9 +358,6 @@ void PFLSZ_CheckZoneHistory(
 
 // =====================================================
 // UPDATE ZONE STATE
-//
-// previousPrice is the previous completed candle close.
-// This is a directional estimate, not a prediction.
 // =====================================================
 
 void PFLSZ_UpdateZoneState(
@@ -211,7 +387,6 @@ void PFLSZ_UpdateZoneState(
       return;
    }
 
-   // Demand: price above zone and moving downward.
    if(zone.isDemand)
    {
       if(currentPrice > zone.upper)
@@ -229,7 +404,6 @@ void PFLSZ_UpdateZoneState(
       return;
    }
 
-   // Supply: price below zone and moving upward.
    if(currentPrice < zone.lower)
    {
       if(previousPrice > 0.0 &&
@@ -474,7 +648,7 @@ double PFLSZ_FreshnessScore(
 
 // =====================================================
 // END OF PFLS ZONES MODULE
-// VERSION 1.30
+// VERSION 1.40
 // =====================================================
 
 #endif
