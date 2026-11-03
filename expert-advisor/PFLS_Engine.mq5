@@ -1,6 +1,6 @@
 
 #property strict
-#property version "1.10"
+#property version "1.20"
 #property description "PFLS Trader - Multi-Timeframe Zone Scanner"
 #property description "Read-only development build. No orders."
 
@@ -37,6 +37,29 @@ string TimeframeNames[8] =
 };
 
 // ============================================
+// ZONE STATE LABEL
+// ============================================
+
+string PFLS_GetZoneStateName(
+   ENUM_PFLS_ZONE_STATE state
+)
+{
+   switch(state)
+   {
+      case PFLS_ZONE_APPROACHING:
+         return "APPROACHING";
+
+      case PFLS_ZONE_INSIDE:
+         return "INSIDE";
+
+      case PFLS_ZONE_DEPARTED:
+         return "DEPARTED";
+   }
+
+   return "UNKNOWN";
+}
+
+// ============================================
 // PRINT ZONE INFORMATION
 // ============================================
 
@@ -58,12 +81,22 @@ void PrintZone(
       DoubleToString(zone.lower, digits),
       " - ",
       DoubleToString(zone.upper, digits),
+      " | State: ",
+      PFLS_GetZoneStateName(zone.zoneState),
       " | Touches: ",
       zone.touches,
       " | Freshness score: ",
-      DoubleToString(PFLSZ_FreshnessScore(zone), 1),
+      DoubleToString(
+         PFLSZ_FreshnessScore(zone),
+         1
+      ),
+      " | Distance (points): ",
+      DoubleToString(zone.distancePoints, 1),
       " | Formed: ",
-      TimeToString(zone.formedAt, TIME_DATE | TIME_MINUTES)
+      TimeToString(
+         zone.formedAt,
+         TIME_DATE | TIME_MINUTES
+      )
    );
 }
 
@@ -77,7 +110,11 @@ void ScanConfluence(
    int digits
 )
 {
-   Print("---------- ", zoneType, " MTZC ----------");
+   Print(
+      "---------- ",
+      zoneType,
+      " MTZC ----------"
+   );
 
    bool foundConfluence = false;
 
@@ -102,12 +139,18 @@ void ScanConfluence(
                TimeframeNames[j],
                " | Range: ",
                DoubleToString(
-                  MathMax(zones[i].lower, zones[j].lower),
+                  MathMax(
+                     zones[i].lower,
+                     zones[j].lower
+                  ),
                   digits
                ),
                " - ",
                DoubleToString(
-                  MathMin(zones[i].upper, zones[j].upper),
+                  MathMin(
+                     zones[i].upper,
+                     zones[j].upper
+                  ),
                   digits
                )
             );
@@ -141,7 +184,7 @@ void ScanMarket()
    Print("========== PFLS SCAN ==========");
    Print("Symbol: ", _Symbol);
    Print("Price: ", DoubleToString(price, _Digits));
-   Print("Mode: READ ONLY");
+   Print("Mode: READ ONLY - NO TRADES");
 
    for(int i = 0; i < 8; i++)
    {
@@ -155,7 +198,11 @@ void ScanMarket()
          supplyZones[i]
       );
 
-      Print("---------- ", TimeframeNames[i], " ----------");
+      Print(
+         "---------- ",
+         TimeframeNames[i],
+         " ----------"
+      );
 
       PrintZone(
          "Demand",
@@ -170,7 +217,10 @@ void ScanMarket()
       );
    }
 
-   // Compare zones across timeframes.
+   // ==========================================
+   // MULTI-TIMEFRAME CONFLUENCE
+   // ==========================================
+
    ScanConfluence(
       demandZones,
       "DEMAND",
@@ -203,9 +253,10 @@ int OnInit()
    EventSetTimer(ScanIntervalSeconds);
 
    Print("================================");
-   Print("PFLS ENGINE v1.10 INITIALIZED");
+   Print("PFLS ENGINE v1.20 INITIALIZED");
    Print("Instrument: ", _Symbol);
    Print("Timeframes: 8");
+   Print("Zone states: ENABLED");
    Print("Mode: READ ONLY - NO TRADES");
    Print("================================");
 
