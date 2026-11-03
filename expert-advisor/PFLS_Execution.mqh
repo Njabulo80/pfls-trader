@@ -7,11 +7,11 @@
 
 // ============================================
 // PFLS EXECUTION MODULE
-// Version 1.10
-// DEMO DEVELOPMENT BUILD
+// Version 1.20
+// DEVELOPMENT BUILD
 // ============================================
 
-// Execution is OFF by default.
+// Execution OFF by default.
 input bool PFLS_EnableExecution = false;
 input bool PFLS_EmergencyStop = false;
 
@@ -82,16 +82,12 @@ bool PFLS_ExecutionGetM5Signal(
       1,
       candle
    ) != 1)
-   {
       return false;
-   }
 
    signalBarTime = candle[0].time;
 
-   if(signalBarTime <= 0)
-      return false;
-
-   if(signalBarTime <= PFLS_LastExecutionBar)
+   if(signalBarTime <= 0 ||
+      signalBarTime <= PFLS_LastExecutionBar)
       return false;
 
    bool overlapsDemand =
@@ -132,7 +128,6 @@ bool PFLS_ExecutionGetM5Signal(
 
 // ============================================
 // COUNT DISTINCT ENTRY ORDERS TODAY
-// Partial fills of one order count as one.
 // Uses broker server time.
 // ============================================
 
@@ -172,17 +167,13 @@ int PFLS_ExecutionCountToday()
          deal,
          DEAL_SYMBOL
       ) != _Symbol)
-      {
          continue;
-      }
 
       if((ulong)HistoryDealGetInteger(
          deal,
          DEAL_MAGIC
       ) != PFLS_MagicNumber)
-      {
          continue;
-      }
 
       ENUM_DEAL_ENTRY entry =
          (ENUM_DEAL_ENTRY)HistoryDealGetInteger(
@@ -192,9 +183,7 @@ int PFLS_ExecutionCountToday()
 
       if(entry != DEAL_ENTRY_IN &&
          entry != DEAL_ENTRY_INOUT)
-      {
          continue;
-      }
 
       ulong orderTicket =
          (ulong)HistoryDealGetInteger(
@@ -230,7 +219,6 @@ int PFLS_ExecutionCountToday()
 // ============================================
 // ONE POSITION AT A TIME ON THIS SYMBOL
 // Includes manual and other EA positions.
-// Prevents netting-account interference.
 // ============================================
 
 bool PFLS_ExecutionHasOpenPosition()
@@ -315,28 +303,7 @@ bool PFLS_ExecutionPermissions()
 }
 
 // ============================================
-// DEMO ACCOUNT PROTECTION
-// ============================================
-
-bool PFLS_ExecutionDemoCheck()
-{
-   ENUM_ACCOUNT_TRADE_MODE mode =
-      (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(
-         ACCOUNT_TRADE_MODE
-      );
-
-   if(mode != ACCOUNT_TRADE_MODE_DEMO)
-   {
-      Print("PFLS: Execution restricted to demo accounts.");
-      return false;
-   }
-
-   return true;
-}
-
-// ============================================
-// VERIFY CURRENT PRICE IS STILL IN ENTRY ZONE
-// Prevents late entries after price has departed.
+// VERIFY CURRENT PRICE IS IN ENTRY ZONE
 // ============================================
 
 bool PFLS_ExecutionPriceInsideZone(
@@ -366,16 +333,12 @@ bool PFLS_ExecutionTryTrade(
    datetime signalBarTime
 )
 {
-   // ----------------------------------------
    // EXECUTION SWITCH
-   // ----------------------------------------
 
    if(!PFLS_EnableExecution)
       return false;
 
-   // ----------------------------------------
    // EMERGENCY STOP
-   // ----------------------------------------
 
    if(PFLS_EmergencyStop)
    {
@@ -383,29 +346,16 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // ----------------------------------------
-   // DEMO ACCOUNT PROTECTION
-   // ----------------------------------------
-
-   if(!PFLS_ExecutionDemoCheck())
-      return false;
-
-   // ----------------------------------------
    // TRADING PERMISSIONS
-   // ----------------------------------------
 
    if(!PFLS_ExecutionPermissions())
       return false;
 
-   // ----------------------------------------
    // CONFIGURATION VALIDATION
-   // ----------------------------------------
 
    if(signalBarTime <= 0 ||
       signalBarTime <= PFLS_LastExecutionBar)
-   {
       return false;
-   }
 
    if(PFLS_FixedLots != 0.01 ||
       PFLS_MaxRiskPercent <= 0.0 ||
@@ -418,9 +368,7 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // ----------------------------------------
    // VALIDATE ZONES
-   // ----------------------------------------
 
    if(!entryZone.valid ||
       !targetZone.valid ||
@@ -442,9 +390,7 @@ bool PFLS_ExecutionTryTrade(
          return false;
    }
 
-   // ----------------------------------------
    // POSITION LIMIT
-   // ----------------------------------------
 
    if(PFLS_ExecutionHasOpenPosition())
    {
@@ -452,9 +398,7 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // ----------------------------------------
    // DAILY TRADE LIMIT
-   // ----------------------------------------
 
    int dailyTrades = PFLS_ExecutionCountToday();
 
@@ -470,16 +414,12 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // ----------------------------------------
    // FIXED VOLUME
-   // ----------------------------------------
 
    if(!PFLS_ExecutionValidateVolume())
       return false;
 
-   // ----------------------------------------
    // CURRENT PRICE
-   // ----------------------------------------
 
    MqlTick tick;
 
@@ -497,7 +437,6 @@ bool PFLS_ExecutionTryTrade(
    if(point <= 0.0)
       return false;
 
-   // Price must still be inside the entry zone.
    if(!PFLS_ExecutionPriceInsideZone(entryZone, tick))
       return false;
 
@@ -506,9 +445,7 @@ bool PFLS_ExecutionTryTrade(
    double stopLoss;
    double takeProfit;
 
-   // ----------------------------------------
    // BUY LEVELS
-   // ----------------------------------------
 
    if(isBuy)
    {
@@ -525,13 +462,10 @@ bool PFLS_ExecutionTryTrade(
          return false;
       }
    }
-
-   // ----------------------------------------
-   // SELL LEVELS
-   // ----------------------------------------
-
    else
    {
+      // SELL LEVELS
+
       stopLoss =
          entryZone.upper +
          PFLS_StopBufferPoints * point;
@@ -546,9 +480,7 @@ bool PFLS_ExecutionTryTrade(
       }
    }
 
-   // ----------------------------------------
-   // NORMALIZE TO SYMBOL TICK SIZE
-   // ----------------------------------------
+   // NORMALIZE PRICES
 
    stopLoss = PFLS_NormalizeTradePrice(stopLoss);
    takeProfit = PFLS_NormalizeTradePrice(takeProfit);
@@ -561,9 +493,7 @@ bool PFLS_ExecutionTryTrade(
                  takeProfit >= entryPrice))
       return false;
 
-   // ----------------------------------------
    // BROKER STOP DISTANCE
-   // ----------------------------------------
 
    long stopsLevel = SymbolInfoInteger(
       _Symbol,
@@ -589,9 +519,7 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // ----------------------------------------
    // CASH RISK CALCULATION
-   // ----------------------------------------
 
    double estimatedLoss = 0.0;
 
@@ -623,13 +551,11 @@ bool PFLS_ExecutionTryTrade(
 
    if(estimatedLoss > maximumLoss)
    {
-      Print("PFLS: Estimated loss exceeds 3% risk limit.");
+      Print("PFLS: Estimated loss exceeds risk limit.");
       return false;
    }
 
-   // ----------------------------------------
    // FREE MARGIN VALIDATION
-   // ----------------------------------------
 
    double requiredMargin = 0.0;
 
@@ -652,12 +578,9 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // ----------------------------------------
    // PREPARE ORDER
-   // ----------------------------------------
 
    PFLS_Trade.SetExpertMagicNumber(PFLS_MagicNumber);
-
    PFLS_Trade.SetDeviationInPoints(20);
 
    if(!PFLS_Trade.SetTypeFillingBySymbol(_Symbol))
@@ -666,15 +589,11 @@ bool PFLS_ExecutionTryTrade(
       return false;
    }
 
-   // Mark candle before sending to prevent
-   // repeated submissions after a rejection.
+   // Prevent repeated attempts on the same candle.
+
    PFLS_LastExecutionBar = signalBarTime;
 
    bool submitted = false;
-
-   // ----------------------------------------
-   // BUY ORDER
-   // ----------------------------------------
 
    if(isBuy)
    {
@@ -687,11 +606,6 @@ bool PFLS_ExecutionTryTrade(
          "PFLS Automatic BUY"
       );
    }
-
-   // ----------------------------------------
-   // SELL ORDER
-   // ----------------------------------------
-
    else
    {
       submitted = PFLS_Trade.Sell(
@@ -704,9 +618,7 @@ bool PFLS_ExecutionTryTrade(
       );
    }
 
-   // ----------------------------------------
    // SERVER RESPONSE
-   // ----------------------------------------
 
    uint resultCode = PFLS_Trade.ResultRetcode();
 
