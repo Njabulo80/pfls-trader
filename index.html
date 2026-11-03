@@ -6,12 +6,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080d18">
   <meta name="description" content="PFLS Trader - Price Flow Ladder Sequence market analysis for Deriv Volatility 75.">
-
   <link rel="manifest" href="/pfls-trader/manifest.webmanifest">
   <link rel="icon" href="/pfls-trader/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/pfls-trader/icon-192.png">
   <link rel="stylesheet" href="/pfls-trader/styles.css">
-
   <title>PFLS Trader</title>
 </head>
 
@@ -34,9 +32,7 @@
 
 <main class="shell">
 
-  <!-- ======================================
-       HERO SECTION
-  ======================================= -->
+  <!-- HERO -->
 
   <section class="hero">
     <div>
@@ -52,9 +48,7 @@
     </div>
   </section>
 
-  <!-- ======================================
-       MARKET TOOLBAR
-  ======================================= -->
+  <!-- MARKET TOOLBAR -->
 
   <section class="toolbar panel">
     <div class="field">
@@ -78,12 +72,12 @@
       </select>
     </div>
 
-    <button id="refreshBtn" class="btn secondary">Refresh analysis</button>
+    <button id="refreshBtn" class="btn secondary">
+      Refresh analysis
+    </button>
   </section>
 
-  <!-- ======================================
-       MAIN MARKET GRID
-  ======================================= -->
+  <!-- MAIN MARKET GRID -->
 
   <section class="grid-main">
 
@@ -136,9 +130,7 @@
     </div>
   </section>
 
-  <!-- ======================================
-       TIMEFRAME LADDER
-  ======================================= -->
+  <!-- TIMEFRAME LADDER -->
 
   <section class="panel">
     <div class="panel-head">
@@ -161,9 +153,7 @@
     </div>
   </section>
 
-  <!-- ======================================
-       AUTOMATIC ZONE DETECTION
-  ======================================= -->
+  <!-- ZONE DETECTION -->
 
   <section class="panel">
     <div class="panel-head">
@@ -172,6 +162,26 @@
         <h2>Nearest relevant zones</h2>
       </div>
       <span id="zoneCount" class="count">0 zones</span>
+    </div>
+
+    <div class="toolbar zone-controls">
+      <div class="field">
+        <label>ZONE TYPE</label>
+        <select id="zoneFilter">
+          <option value="all">All zones</option>
+          <option value="Demand">Demand only</option>
+          <option value="Supply">Supply only</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>CONFLUENCE</label>
+        <select id="confluenceFilter">
+          <option value="all">All candidates</option>
+          <option value="2">2+ timeframes</option>
+          <option value="3">3+ timeframes</option>
+        </select>
+      </div>
     </div>
 
     <div class="table-scroll">
@@ -204,35 +214,158 @@
     </p>
   </section>
 
-  <!-- ======================================
-       MARKET CONTEXT AND EXECUTION POLICY
-  ======================================= -->
+  <!-- MARKET CONTEXT -->
 
-  <section class="grid-bottom">
+  <section class="panel context-panel">
 
-    <div class="panel">
-      <div class="eyebrow">STRUCTURE OBSERVATION</div>
-      <h2>Market context</h2>
-      <div id="structure" class="structure">
-        Waiting for candle history.
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">STRUCTURE OBSERVATION</div>
+        <h2>Market context intelligence</h2>
       </div>
+      <span class="live-tag">MARKET ANALYSIS</span>
     </div>
 
-    <div class="panel manual">
-      <div class="eyebrow">EXECUTION POLICY</div>
-      <h2>Manual confirmation only</h2>
-      <p>
-        PFLS Trader identifies research candidates. It will not place,
-        modify or close trades.
-      </p>
-      <div class="safe-label">● AUTOMATED ANALYSIS · MANUAL DECISION</div>
+    <div class="context-controls">
+      <div class="field">
+        <label>ANALYSE TIMEFRAME</label>
+        <select id="structureTf">
+          <option value="1w">1 Week</option>
+          <option value="1d">1 Day</option>
+          <option value="4h">4 Hours</option>
+          <option value="1h">1 Hour</option>
+          <option value="30m">30 Minutes</option>
+          <option value="15m">15 Minutes</option>
+          <option value="5m">5 Minutes</option>
+          <option value="1m" selected>1 Minute</option>
+        </select>
+      </div>
+
+      <button id="syncStructureTf" class="btn secondary">
+        Use chart timeframe
+      </button>
+    </div>
+
+    <div class="context-grid">
+
+      <div class="context-card">
+        <small>MARKET DIRECTION</small>
+        <strong id="marketDirection">AWAITING DATA</strong>
+        <p>Recent price progression observation.</p>
+      </div>
+
+      <div class="context-card">
+        <small>STRUCTURE OBSERVATION</small>
+        <strong id="structureState">NOT CONFIRMED</strong>
+        <p>HH / HL or LH / LL requires structural confirmation.</p>
+      </div>
+
+      <div class="context-card">
+        <small>SELECTED TIMEFRAME</small>
+        <strong id="structureTimeframe">1M</strong>
+        <p>Timeframe currently under observation.</p>
+      </div>
+
+    </div>
+
+    <div class="structure" id="structure">
+      Waiting for candle history.
+    </div>
+
+    <div class="context-note">
+      Price direction alone does not confirm market structure.
+      PFLS must identify confirmed swing highs and swing lows
+      before assigning a bullish or bearish structural bias.
     </div>
 
   </section>
 
-  <!-- ======================================
-       PFLS DEVELOPMENT MONITOR
-  ======================================= -->
+  <!-- MTZC INTELLIGENCE -->
+
+  <section class="panel confluence-panel">
+
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">MULTI-TIMEFRAME ZONE CONFLUENCE</div>
+        <h2>MTZC intelligence</h2>
+      </div>
+      <span id="confluenceCount" class="count">0 overlaps</span>
+    </div>
+
+    <p class="muted">
+      Identifies overlapping supply or demand candidates across
+      different timeframes.
+    </p>
+
+    <div id="confluenceSummary" class="confluence-summary">
+      Waiting for multi-timeframe zone analysis.
+    </div>
+
+    <div id="confluenceRows" class="confluence-list">
+      <div class="empty-row">
+        No confluence information available yet.
+      </div>
+    </div>
+
+    <p class="note">
+      Zone overlap is not an entry signal. Market structure,
+      price reaction and execution rules must still be validated.
+    </p>
+
+  </section>
+
+  <!-- EXECUTION STATUS -->
+
+  <section class="panel execution-panel">
+
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">EXECUTION POLICY</div>
+        <h2>EA connection and execution status</h2>
+      </div>
+      <span class="dev-status status-pending" id="eaConnectionStatus">
+        NOT CONNECTED
+      </span>
+    </div>
+
+    <div class="execution-grid">
+
+      <div class="execution-card">
+        <small>EA ENGINE</small>
+        <strong>1.81</strong>
+        <span>Source version</span>
+      </div>
+
+      <div class="execution-card">
+        <small>EXECUTION MODULE</small>
+        <strong>1.62</strong>
+        <span>Source version</span>
+      </div>
+
+      <div class="execution-card">
+        <small>ZONE MODULE</small>
+        <strong>1.40</strong>
+        <span>Source version</span>
+      </div>
+
+    </div>
+
+    <div class="execution-message">
+      <strong>Connection has not been established.</strong>
+      <p>
+        The PWA currently analyses public Deriv market data.
+        It is not yet connected to MetaTrader 5 and cannot
+        send commands to, monitor or control the EA.
+      </p>
+    </div>
+
+    <div class="safe-label">
+      ● MARKET RESEARCH ACTIVE · EA CONTROL NOT CONNECTED
+    </div>
+
+  </section>
+
+  <!-- DEVELOPMENT MONITOR -->
 
   <section class="panel dev-monitor">
 
@@ -245,11 +378,9 @@
     </div>
 
     <p class="muted">
-      Track the development, testing and validation
+      Track source development, integration, testing and validation
       of the Price Flow Ladder Sequence system.
     </p>
-
-    <!-- DEVELOPMENT SUMMARY -->
 
     <div class="dev-summary">
 
@@ -260,9 +391,9 @@
       </div>
 
       <div class="dev-stat">
-        <small>EA MODE</small>
-        <strong>READ ONLY</strong>
-        <span>No automated orders</span>
+        <small>EA SOURCE</small>
+        <strong>1.81</strong>
+        <span>Engine version</span>
       </div>
 
       <div class="dev-stat">
@@ -279,79 +410,83 @@
 
     </div>
 
-    <!-- MODULE TRACKER -->
-
     <div class="dev-subhead">DEVELOPMENT MODULES</div>
 
     <div class="dev-list">
 
       <div class="dev-item">
         <div>
-          <strong>Multi-timeframe scanner</strong>
-          <small>Eight timeframe configurations</small>
+          <b>Multi-timeframe scanner</b>
+          <small>Eight timeframe configurations · Engine 1.81</small>
         </div>
         <span class="dev-status status-built">SOURCE UPDATED</span>
       </div>
 
       <div class="dev-item">
         <div>
-          <strong>Supply and demand detection</strong>
-          <small>Nearest candidate zone identification</small>
+          <b>Supply and demand detection</b>
+          <small>Zone detection · Zones 1.40</small>
         </div>
         <span class="dev-status status-built">SOURCE UPDATED</span>
       </div>
 
       <div class="dev-item">
         <div>
-          <strong>Zone touch and invalidation</strong>
-          <small>Distinct visits and close-based invalidation</small>
+          <b>Zone touch and invalidation</b>
+          <small>Zone interaction and historical checks</small>
         </div>
         <span class="dev-status status-built">SOURCE UPDATED</span>
       </div>
 
       <div class="dev-item">
         <div>
-          <strong>MTZC confluence</strong>
-          <small>Overlapping zones across timeframes</small>
+          <b>MTZC confluence</b>
+          <small>Multi-timeframe zone overlap analysis</small>
         </div>
         <span class="dev-status status-built">SOURCE UPDATED</span>
       </div>
 
       <div class="dev-item">
         <div>
-          <strong>Zone interaction states</strong>
-          <small>Approaching, inside and departed</small>
+          <b>M5 execution module</b>
+          <small>Rejection, breakout and risk controls · 1.62</small>
         </div>
         <span class="dev-status status-built">SOURCE UPDATED</span>
       </div>
 
       <div class="dev-item">
         <div>
-          <strong>MetaTrader compilation</strong>
-          <small>Compile and resolve errors</small>
+          <b>MetaTrader compilation</b>
+          <small>Compilation has not yet been verified</small>
+        </div>
+        <span class="dev-status status-pending">NOT VERIFIED</span>
+      </div>
+
+      <div class="dev-item">
+        <div>
+          <b>Historical backtesting</b>
+          <small>Wins, losses and drawdown validation</small>
         </div>
         <span class="dev-status status-pending">PENDING</span>
       </div>
 
       <div class="dev-item">
         <div>
-          <strong>Historical backtesting</strong>
-          <small>Wins, losses and drawdown</small>
+          <b>Secure PWA–EA connection</b>
+          <small>Backend communication and monitoring</small>
         </div>
         <span class="dev-status status-pending">PENDING</span>
       </div>
 
       <div class="dev-item">
         <div>
-          <strong>Out-of-sample validation</strong>
+          <b>Out-of-sample validation</b>
           <small>Testing on unseen historical data</small>
         </div>
         <span class="dev-status status-pending">PENDING</span>
       </div>
 
     </div>
-
-    <!-- PERFORMANCE OBJECTIVE -->
 
     <div class="dev-target">
 
@@ -377,18 +512,16 @@
     </div>
 
     <div class="dev-footer">
-      PFLS TRADER · DEVELOPMENT TRACKER · MANUAL STATUS
+      PFLS TRADER · DEVELOPMENT TRACKER · SOURCE STATUS
     </div>
 
   </section>
 
-  <!-- ======================================
-       FOOTER
-  ======================================= -->
+  <!-- FOOTER -->
 
   <footer>
     <span>PFLS TRADER · RESEARCH BUILD</span>
-    <span>Deriv public market data · No trading permissions</span>
+    <span>Deriv public market data · No EA connection</span>
   </footer>
 
 </main>
@@ -398,10 +531,12 @@
 <script src="/pfls-trader/app.js"></script>
 
 <script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/pfls-trader/sw.js')
-      .catch(error => console.error('Service worker registration failed:', error));
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/pfls-trader/sw.js")
+      .catch(error =>
+        console.error("Service worker registration failed:", error)
+      );
   });
 }
 </script>
