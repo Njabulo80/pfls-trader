@@ -1,11 +1,12 @@
 
-const CACHE = "pfls-trader-v1";
+const CACHE = "pfls-trader-v2";
 
 const APP_FILES = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./bridge.js",
   "./manifest.webmanifest",
   "./icon-192.png",
   "./icon-512.png"
