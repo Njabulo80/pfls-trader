@@ -1,7 +1,7 @@
 
 #property strict
-#property version "1.81"
-#property description "PFLS Trader - Multi-Timeframe Structure Confluence and Controlled Retry Engine"
+#property version "1.82"
+#property description "PFLS Trader - Multi-Timeframe Structure Confluence, Controlled Retry and Cloud Heartbeat"
 
 #include "PFLS_Zones.mqh"
 #include "PFLS_Execution.mqh"
@@ -15,9 +15,25 @@ input int PivotStrength = 2;
 input int ScanIntervalSeconds = 30;
 input int MinimumHTFVotes = 3;
 
+// Leave blank in GitHub.
+// Enter the actual secret privately in MT5 EA Inputs.
+input string PFLS_BridgeSecret = "";
+
 #define PFLS_TIMEFRAME_COUNT 8
 #define PFLS_HTF_COUNT 5
 #define PFLS_M5_INDEX 6
+
+// =====================================================
+// CLOUD COMMUNICATION SETTINGS
+// =====================================================
+
+#define PFLS_BRIDGE_URL "https://pfls-communication-bridge-v2.dlamininjabulombhodziya.workers.dev/api/ea/heartbeat"
+
+#define PFLS_EA_VERSION "1.82"
+#define PFLS_HEARTBEAT_INTERVAL 30
+#define PFLS_BRIDGE_TIMEOUT 5000
+
+datetime PFLS_LastHeartbeatTime = 0;
 
 // =====================================================
 // TIMEFRAMES
@@ -53,6 +69,120 @@ datetime PFLS_ConfluenceSignalTime = 0;
 int PFLS_ConfluenceVotes = 0;
 bool PFLS_ConfluencePassed = false;
 bool PFLS_ConfluenceEvaluated = false;
+
+// =====================================================
+// CLOUD HEARTBEAT
+// =====================================================
+
+void PFLS_SendHeartbeat()
+{
+   if(PFLS_BridgeSecret == "")
+      return;
+
+   datetime now = TimeLocal();
+
+   if(PFLS_LastHeartbeatTime > 0 &&
+      now - PFLS_LastHeartbeatTime < PFLS_HEARTBEAT_INTERVAL)
+      return;
+
+   // Prevent repeated requests if the bridge is unavailable.
+   PFLS_LastHeartbeatTime = now;
+
+   bool terminalConnected =
+      (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+
+   string terminalStatus =
+      terminalConnected ? "true" : "false";
+
+   string payload = StringFormat(
+      "{\"ea_version\":\"%s\","
+      "\"symbol\":\"%s\","
+      "\"timeframe\":\"%s\","
+      "\"status\":\"RUNNING\","
+      "\"terminal_connected\":%s}",
+      PFLS_EA_VERSION,
+      _Symbol,
+      EnumToString(_Period),
+      terminalStatus
+   );
+
+   char requestData[];
+   char responseData[];
+
+   string responseHeaders;
+
+   int dataSize = StringToCharArray(
+      payload,
+      requestData,
+      0,
+      WHOLE_ARRAY,
+      CP_UTF8
+   );
+
+   if(dataSize <= 1)
+   {
+      Print("PFLS BRIDGE: Unable to prepare heartbeat.");
+      return;
+   }
+
+   // Remove terminating null character.
+   ArrayResize(requestData, dataSize - 1);
+
+   string headers =
+      "Content-Type: application/json\r\n"
+      "Authorization: Bearer " +
+      PFLS_BridgeSecret +
+      "\r\n";
+
+   ResetLastError();
+
+   int responseCode = WebRequest(
+      "POST",
+      PFLS_BRIDGE_URL,
+      headers,
+      PFLS_BRIDGE_TIMEOUT,
+      requestData,
+      responseData,
+      responseHeaders
+   );
+
+   if(responseCode == -1)
+   {
+      Print(
+         "PFLS BRIDGE ERROR | WebRequest failed. Error: ",
+         GetLastError()
+      );
+
+      return;
+   }
+
+   string responseText = CharArrayToString(
+      responseData,
+      0,
+      -1,
+      CP_UTF8
+   );
+
+   if(responseCode == 200)
+   {
+      Print(
+         "PFLS HEARTBEAT ACCEPTED | ",
+         "Symbol: ",
+         _Symbol,
+         " | Terminal connected: ",
+         terminalConnected
+      );
+   }
+   else
+   {
+      Print(
+         "PFLS BRIDGE RESPONSE | HTTP: ",
+         responseCode,
+         " | Response: ",
+         responseText
+      );
+   }
+}
 
 // =====================================================
 // RESET ZONES
@@ -178,7 +308,7 @@ void ScanMarket()
    PFLS_LastScanTime = TimeCurrent();
 
    Print(
-      "PFLS v1.81 SCAN | Symbol: ",
+      "PFLS v1.82 SCAN | Symbol: ",
       _Symbol,
       " | Price: ",
       DoubleToString(currentPrice, _Digits),
@@ -311,7 +441,6 @@ void PFLS_ProcessEntry()
 
    // --------------------------------------------------
    // HIGHER TIMEFRAME CONFLUENCE
-   // Evaluate once per signal.
    // --------------------------------------------------
 
    if(!PFLS_ConfluenceEvaluated ||
@@ -418,9 +547,6 @@ void PFLS_ProcessEntry()
          "PFLS: Trade not accepted. "
          "Pending signal retained for controlled retry."
       );
-
-      // Do not consume the signal here.
-      // Execution module controls retry timing.
    }
 }
 
@@ -449,14 +575,24 @@ int OnInit()
    }
 
    Print("======================================");
-   Print("PFLS TRADER ENGINE v1.81");
+   Print("PFLS TRADER ENGINE v1.82");
    Print("Symbol: ", _Symbol);
    Print("Timeframes: 8");
    Print("Structure timeframes: 5");
    Print("Minimum structure votes: ", MinimumHTFVotes);
    Print("Execution enabled: ", PFLS_EnableExecution);
    Print("Controlled retry handling: ACTIVE");
+   Print("Cloud heartbeat: ", 
+         PFLS_BridgeSecret != "" ? "CONFIGURED" : "NOT CONFIGURED");
    Print("======================================");
+
+   if(PFLS_BridgeSecret == "")
+   {
+      Print(
+         "PFLS NOTICE: Cloud heartbeat disabled. "
+         "Enter the bridge secret in EA Inputs."
+      );
+   }
 
    ScanMarket();
 
@@ -479,6 +615,8 @@ void OnTick()
 void OnTimer()
 {
    ScanMarket();
+
+   PFLS_SendHeartbeat();
 }
 
 // =====================================================
@@ -490,7 +628,7 @@ void OnDeinit(const int reason)
    EventKillTimer();
 
    Print(
-      "PFLS ENGINE v1.81 stopped. Reason: ",
+      "PFLS ENGINE v1.82 stopped. Reason: ",
       reason
    );
 }
