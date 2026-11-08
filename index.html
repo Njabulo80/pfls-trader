@@ -323,8 +323,9 @@
         <div class="eyebrow">EXECUTION POLICY</div>
         <h2>EA connection and execution status</h2>
       </div>
+
       <span class="dev-status status-pending" id="eaConnectionStatus">
-        NOT CONNECTED
+        CHECKING CONNECTION
       </span>
     </div>
 
@@ -350,17 +351,20 @@
 
     </div>
 
+    <!-- Dynamically updated by bridge.js -->
+
     <div class="execution-message">
-      <strong>Connection has not been established.</strong>
-      <p>
-        The PWA currently analyses public Deriv market data.
-        It is not yet connected to MetaTrader 5 and cannot
-        send commands to, monitor or control the EA.
+      <strong id="pflsConnectionHeadline">
+        Checking EA heartbeat connection...
+      </strong>
+
+      <p id="pflsConnectionDescription">
+        Checking the secure communication bridge.
       </p>
     </div>
 
-    <div class="safe-label">
-      ● MARKET RESEARCH ACTIVE · EA CONTROL NOT CONNECTED
+    <div class="safe-label" id="pflsConnectionSafety">
+      ● MARKET RESEARCH ACTIVE · CHECKING CONNECTION
     </div>
 
   </section>
@@ -457,7 +461,7 @@
       <div class="dev-item">
         <div>
           <b>MetaTrader compilation</b>
-          <small>Compilation has not yet been verified</small>
+          <small>Compilation has not yet been independently verified</small>
         </div>
         <span class="dev-status status-pending">NOT VERIFIED</span>
       </div>
@@ -472,10 +476,22 @@
 
       <div class="dev-item">
         <div>
-          <b>Secure PWA–EA connection</b>
-          <small>Backend ready · Waiting for first EA heartbeat</small>
+          <b>EA heartbeat monitoring</b>
+          <small>Cloudflare heartbeat reporting · Read-only status</small>
         </div>
-        <span class="dev-status status-pending">PENDING</span>
+        <span class="dev-status status-pending" id="pflsHeartbeatModuleStatus">
+          CHECKING
+        </span>
+      </div>
+
+      <div class="dev-item">
+        <div>
+          <b>Two-way EA control integration</b>
+          <small>Not implemented · No remote trading commands</small>
+        </div>
+        <span class="dev-status status-pending">
+          NOT IMPLEMENTED
+        </span>
       </div>
 
       <div class="dev-item">
@@ -521,7 +537,7 @@
 
   <footer>
     <span>PFLS TRADER · RESEARCH BUILD</span>
-    <span>Deriv public market data · No EA connection</span>
+    <span>Deriv public market data · EA heartbeat monitoring via Cloudflare</span>
   </footer>
 
 </main>
