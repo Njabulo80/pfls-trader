@@ -1,7 +1,7 @@
 
 /* ==========================================
    PFLS TRADER - COMMUNICATION BRIDGE
-   Version 1.1
+   Version 1.2
    Cloudflare + MT5 heartbeat monitoring
    READ ONLY - NO TRADE EXECUTION
 ========================================== */
@@ -16,9 +16,31 @@
     BRIDGE_URL + "/api/dashboard/status";
 
   const POLL_INTERVAL = 15000;
+  const HEARTBEAT_TIMEOUT = 90000;
 
   let checking = false;
   let monitorTimer = null;
+
+  function updateText(id, value) {
+    const element = document.getElementById(id);
+
+    if (element) {
+      element.textContent = value;
+    }
+  }
+
+  function updateStatusClass(element, online) {
+    if (!element) return;
+
+    element.classList.remove(
+      "status-pending",
+      "status-built"
+    );
+
+    element.classList.add(
+      online ? "status-built" : "status-pending"
+    );
+  }
 
   function createMonitor() {
     const panel = document.querySelector(".execution-panel");
@@ -69,46 +91,6 @@
     return box;
   }
 
-  function updateText(id, value) {
-    const element = document.getElementById(id);
-
-    if (element) {
-      element.textContent = value;
-    }
-  }
-
-  function showOffline(message) {
-    updateText(
-      "pflsBridgeStatus",
-      "Bridge: UNAVAILABLE"
-    );
-
-    updateText(
-      "pflsStorageStatus",
-      "Storage: Not verified"
-    );
-
-    updateText(
-      "pflsHeartbeatStatus",
-      "EA heartbeat: Not verified"
-    );
-
-    updateText(
-      "pflsTerminalStatus",
-      "MT5 terminal: Not confirmed"
-    );
-
-    updateText(
-      "pflsHeartbeatAge",
-      "Heartbeat age: Unknown"
-    );
-
-    updateText(
-      "pflsBridgeUpdated",
-      message
-    );
-  }
-
   function formatAge(milliseconds) {
     if (
       typeof milliseconds !== "number" ||
@@ -135,89 +117,147 @@
     return hours + " hours ago";
   }
 
+  function showOffline(message) {
+    updateText(
+      "pflsBridgeStatus",
+      "Bridge: UNAVAILABLE"
+    );
+
+    updateText(
+      "pflsStorageStatus",
+      "Storage: Not verified"
+    );
+
+    updateText(
+      "pflsHeartbeatStatus",
+      "EA heartbeat: NOT VERIFIED"
+    );
+
+    updateText(
+      "pflsTerminalStatus",
+      "MT5 terminal: NOT CONFIRMED"
+    );
+
+    updateText(
+      "pflsHeartbeatAge",
+      "Heartbeat age: Unknown"
+    );
+
+    updateText(
+      "pflsBridgeUpdated",
+      message
+    );
+
+    updateText(
+      "eaConnectionStatus",
+      "CONNECTION UNAVAILABLE"
+    );
+
+    updateStatusClass(
+      document.getElementById("eaConnectionStatus"),
+      false
+    );
+
+    updateText(
+      "pflsConnectionHeadline",
+      "Cloudflare status could not be retrieved."
+    );
+
+    updateText(
+      "pflsConnectionDescription",
+      "The PWA could not verify the latest EA heartbeat. This does not prove that MT5 is disconnected."
+    );
+
+    updateText(
+      "pflsConnectionSafety",
+      "● MARKET RESEARCH ACTIVE · CONNECTION NOT VERIFIED · EA CONTROL DISABLED"
+    );
+
+    updateText(
+      "pflsHeartbeatModuleStatus",
+      "NOT VERIFIED"
+    );
+
+    updateStatusClass(
+      document.getElementById("pflsHeartbeatModuleStatus"),
+      false
+    );
+  }
+
   function displayHeartbeat(data) {
-    const heartbeat = data.heartbeat;
+    const heartbeat = data.heartbeat || null;
 
-    if (!heartbeat) {
-      updateText(
-        "pflsHeartbeatStatus",
-        "EA heartbeat: WAITING FOR FIRST HEARTBEAT"
-      );
+    const storageAvailable =
+      data.storage_available === true;
 
-      updateText(
-        "pflsTerminalStatus",
-        "MT5 terminal: NOT CONFIRMED"
-      );
+    const age = data.heartbeat_age_ms;
 
-      updateText(
-        "pflsEAVersion",
-        "EA version: Unknown"
-      );
+    const fresh =
+      typeof age === "number" &&
+      Number.isFinite(age) &&
+      age >= 0 &&
+      age <= HEARTBEAT_TIMEOUT;
 
-      updateText(
-        "pflsSymbol",
-        "Trading symbol: Unknown"
-      );
+    const eaOnline =
+      data.ea_online === true &&
+      fresh &&
+      !!heartbeat;
 
-      updateText(
-        "pflsTimeframe",
-        "EA timeframe: Unknown"
-      );
+    const terminalConnected =
+      eaOnline &&
+      data.mt5_connected === true &&
+      heartbeat.terminal_connected === true;
 
-      updateText(
-        "pflsHeartbeatAge",
-        "Heartbeat age: No heartbeat received"
-      );
+    updateText(
+      "pflsBridgeStatus",
+      "Bridge: ONLINE · Version " +
+        (data.version || "Unknown")
+    );
 
-      updateText(
-        "pflsHeartbeatTime",
-        "Last heartbeat: None"
-      );
-
-      return;
-    }
-
-    const online = data.ea_online === true;
+    updateText(
+      "pflsStorageStatus",
+      "Storage: " +
+        (storageAvailable ? "AVAILABLE" : "UNAVAILABLE")
+    );
 
     updateText(
       "pflsHeartbeatStatus",
       "EA heartbeat: " +
-        (online ? "ONLINE" : "STALE")
+        (eaOnline ? "RECEIVED · ONLINE" : "NOT ONLINE")
     );
 
     updateText(
       "pflsTerminalStatus",
       "MT5 terminal: " +
-        (online && heartbeat.terminal_connected
+        (terminalConnected
           ? "CONNECTED (reported by EA)"
           : "NOT CONFIRMED")
     );
 
     updateText(
+      "pflsHeartbeatAge",
+      "Heartbeat age: " + formatAge(age)
+    );
+
+    updateText(
       "pflsEAVersion",
       "EA version: " +
-        (heartbeat.ea_version || "Unknown")
+        (heartbeat?.ea_version || "Unknown")
     );
 
     updateText(
       "pflsSymbol",
       "Trading symbol: " +
-        (heartbeat.symbol || "Unknown")
+        (heartbeat?.symbol || "Unknown")
     );
 
     updateText(
       "pflsTimeframe",
       "EA timeframe: " +
-        (heartbeat.timeframe || "Unknown")
+        (heartbeat?.timeframe || "Unknown")
     );
 
-    updateText(
-      "pflsHeartbeatAge",
-      "Heartbeat age: " +
-        formatAge(data.heartbeat_age_ms)
-    );
-
-    const receivedAt = heartbeat.received_at
+    const receivedAt = heartbeat?.received_at
       ? new Date(heartbeat.received_at)
       : null;
 
@@ -231,6 +271,89 @@
             : "Unknown"
         )
     );
+
+    updateText(
+      "pflsBridgeUpdated",
+      "Last checked: " +
+        new Date().toLocaleTimeString()
+    );
+
+    if (eaOnline && terminalConnected && storageAvailable) {
+      updateText(
+        "eaConnectionStatus",
+        "HEARTBEAT CONNECTED"
+      );
+
+      updateStatusClass(
+        document.getElementById("eaConnectionStatus"),
+        true
+      );
+
+      updateText(
+        "pflsConnectionHeadline",
+        "EA heartbeat connection established."
+      );
+
+      updateText(
+        "pflsConnectionDescription",
+        "Cloudflare is receiving and storing live heartbeat reports from EA " +
+          (heartbeat.ea_version || "Unknown") +
+          " on " +
+          (heartbeat.symbol || "the reported symbol") +
+          ". MT5 terminal connectivity is reported by the EA. The PWA has read-only status access; two-way EA control and trade commands are not implemented."
+      );
+
+      updateText(
+        "pflsConnectionSafety",
+        "● MARKET RESEARCH ACTIVE · EA HEARTBEAT CONNECTED · EA CONTROL DISABLED"
+      );
+
+      updateText(
+        "pflsHeartbeatModuleStatus",
+        "HEARTBEAT CONNECTED"
+      );
+
+      updateStatusClass(
+        document.getElementById("pflsHeartbeatModuleStatus"),
+        true
+      );
+
+    } else {
+      updateText(
+        "eaConnectionStatus",
+        "HEARTBEAT NOT VERIFIED"
+      );
+
+      updateStatusClass(
+        document.getElementById("eaConnectionStatus"),
+        false
+      );
+
+      updateText(
+        "pflsConnectionHeadline",
+        "A current EA and MT5 heartbeat is not confirmed."
+      );
+
+      updateText(
+        "pflsConnectionDescription",
+        "Check that the EA is running, the terminal is connected and Cloudflare storage is available. The PWA only reads heartbeat status; two-way EA control is not implemented."
+      );
+
+      updateText(
+        "pflsConnectionSafety",
+        "● MARKET RESEARCH ACTIVE · HEARTBEAT NOT VERIFIED · EA CONTROL DISABLED"
+      );
+
+      updateText(
+        "pflsHeartbeatModuleStatus",
+        "NOT VERIFIED"
+      );
+
+      updateStatusClass(
+        document.getElementById("pflsHeartbeatModuleStatus"),
+        false
+      );
+    }
   }
 
   async function checkBridge() {
@@ -256,26 +379,14 @@
 
       const data = await response.json();
 
-      updateText(
-        "pflsBridgeStatus",
-        "Bridge: ONLINE · Version " + data.version
-      );
-
-      updateText(
-        "pflsStorageStatus",
-        "Storage: " +
-          (data.storage_available
-            ? "AVAILABLE"
-            : "UNAVAILABLE")
-      );
+      if (
+        !data ||
+        data.service !== "PFLS Communication Bridge"
+      ) {
+        throw new Error("Invalid bridge response");
+      }
 
       displayHeartbeat(data);
-
-      updateText(
-        "pflsBridgeUpdated",
-        "Dashboard updated: " +
-          new Date().toLocaleTimeString()
-      );
 
     } catch (error) {
       console.error(
@@ -314,7 +425,7 @@
     );
 
     console.log(
-      "PFLS Communication Bridge v1.1 started."
+      "PFLS Communication Bridge v1.2 started. READ ONLY."
     );
   }
 
