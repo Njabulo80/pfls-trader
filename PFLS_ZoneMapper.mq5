@@ -1,6 +1,6 @@
 
 #property strict
-#property version   "2.000"
+#property version   "2.001"
 #property description "PFLS 2.00 - Fresh Multi-Timeframe Zone Mapper"
 #property indicator_chart_window
 #property indicator_buffers 0
@@ -8,26 +8,24 @@
 
 // ==========================================================
 // PFLS TRADER - PRICE FLOW LADDER SEQUENCE
-// ZONE MAPPER 2.00
+// ZONE MAPPER 2.001
 //
-// RESEARCH INDICATOR - NO TRADE EXECUTION
+// Research-only indicator. No trade execution.
 //
-// Scans: W1, D1, H4, H1, M30, M15, M5, M1
+// Scans W1, D1, H4, H1, M30, M15, M5, M1.
 //
-// Core features:
-// 1. Origin-candle supply and demand detection
-// 2. Confirmed historical swing BOS
-// 3. Fresh-zone filtering
-// 4. First subsequent price entry marks interaction
-// 5. Only untouched zones are drawn
-// 6. Interacted zones remain in the scan registry
-// 7. Separate timeframe colours
-// 8. Midpoint and timeframe labels
+// Features:
+// - Origin-candle supply and demand detection
+// - Confirmed historical swing BOS
+// - Fresh-zone filtering
+// - First subsequent price entry marks interaction
+// - Only untouched zones are drawn
+// - Interacted zones retained in scan registry
+// - Timeframe-specific colours
+// - Midpoint lines and timeframe labels
 //
-// IMPORTANT:
-// Historical records are rebuilt from available chart
-// history on each scan. Permanent historical storage,
-// advanced zone clustering and trading are not included.
+// Historical registry is rebuilt from available chart
+// history. Permanent storage is not yet implemented.
 // ==========================================================
 
 
@@ -93,7 +91,7 @@ bool TFEnabled[PFLS_TF_COUNT];
 
 
 // ----------------------------------------------------------
-// ZONE REGISTRY
+// ZONE STRUCTURE
 // ----------------------------------------------------------
 
 struct PFLSZone
@@ -154,6 +152,26 @@ string TFName(ENUM_TIMEFRAMES timeframe)
 
 
 // ----------------------------------------------------------
+// SAFE TIMESTAMP TEXT FOR OBJECT NAMES
+// Replaces unsupported LongToString().
+// ----------------------------------------------------------
+
+string ZoneTimeKey(datetime value)
+{
+   string key = TimeToString(
+      value,
+      TIME_DATE|TIME_MINUTES
+   );
+
+   StringReplace(key,".","");
+   StringReplace(key,":","");
+   StringReplace(key," ","_");
+
+   return key;
+}
+
+
+// ----------------------------------------------------------
 // LOAD TIMEFRAME SETTINGS
 // ----------------------------------------------------------
 
@@ -183,13 +201,13 @@ bool IsPivotHigh(
    int total
 )
 {
-   if(index - strength < 0 ||
-      index + strength >= total)
+   if(index-strength < 0 ||
+      index+strength >= total)
       return false;
 
    double value = rates[index].high;
 
-   for(int k = 1; k <= strength; k++)
+   for(int k=1; k<=strength; k++)
    {
       if(value <= rates[index-k].high)
          return false;
@@ -213,13 +231,13 @@ bool IsPivotLow(
    int total
 )
 {
-   if(index - strength < 0 ||
-      index + strength >= total)
+   if(index-strength < 0 ||
+      index+strength >= total)
       return false;
 
    double value = rates[index].low;
 
-   for(int k = 1; k <= strength; k++)
+   for(int k=1; k<=strength; k++)
    {
       if(value >= rates[index-k].low)
          return false;
@@ -246,12 +264,12 @@ bool FindBrokenSwingHigh(
 )
 {
    int searchEnd = (int)MathMin(
-      breakIndex + lookback,
-      total - strength - 1
+      breakIndex+lookback,
+      total-strength-1
    );
 
-   for(int j = breakIndex + strength + 1;
-       j <= searchEnd;
+   for(int j=breakIndex+strength+1;
+       j<=searchEnd;
        j++)
    {
       if(!IsPivotHigh(rates,j,strength,total))
@@ -282,12 +300,12 @@ bool FindBrokenSwingLow(
 )
 {
    int searchEnd = (int)MathMin(
-      breakIndex + lookback,
-      total - strength - 1
+      breakIndex+lookback,
+      total-strength-1
    );
 
-   for(int j = breakIndex + strength + 1;
-       j <= searchEnd;
+   for(int j=breakIndex+strength+1;
+       j<=searchEnd;
        j++)
    {
       if(!IsPivotLow(rates,j,strength,total))
@@ -312,24 +330,22 @@ void ClearPFLSObjects()
 {
    int total = ObjectsTotal(0,0,-1);
 
-   for(int i = total-1; i >= 0; i--)
+   for(int i=total-1; i>=0; i--)
    {
       string name = ObjectName(0,i,0,-1);
 
-      if(StringFind(name,PREFIX) == 0)
+      if(StringFind(name,PREFIX)==0)
          ObjectDelete(0,name);
    }
 }
 
 
 // ----------------------------------------------------------
-// CHECK WHETHER PRICE ENTERED A ZONE AFTER FORMATION
+// CHECK WHETHER PRICE ENTERED ZONE AFTER FORMATION
 //
-// First candle range overlapping the zone counts as
-// interaction, including a very shallow wick entry.
+// Any candle range overlapping the zone counts as entry.
+// This includes a shallow wick entry.
 //
-// breakIndex is the BOS candle.
-// More recent candles have smaller series indices.
 // Index 0 is the current forming candle.
 // ----------------------------------------------------------
 
@@ -340,7 +356,7 @@ bool HasPriceEnteredZone(
    double lower
 )
 {
-   for(int i = breakIndex-1; i >= 0; i--)
+   for(int i=breakIndex-1; i>=0; i--)
    {
       if(rates[i].high >= lower &&
          rates[i].low <= upper)
@@ -368,16 +384,14 @@ void AddZone(
    bool touched
 )
 {
-   if(upper <= lower)
+   if(upper<=lower)
       return;
 
-   // Prevent duplicate origin records.
-
-   for(int i = 0; i < ArraySize(Zones); i++)
+   for(int i=0; i<ArraySize(Zones); i++)
    {
-      if(Zones[i].tfIndex == tfIndex &&
-         Zones[i].demand == demand &&
-         Zones[i].originTime == originTime)
+      if(Zones[i].tfIndex==tfIndex &&
+         Zones[i].demand==demand &&
+         Zones[i].originTime==originTime)
       {
          return;
       }
@@ -385,12 +399,11 @@ void AddZone(
 
    int size = ArraySize(Zones);
 
-   if(ArrayResize(Zones,size+1) != size+1)
+   if(ArrayResize(Zones,size+1)!=size+1)
       return;
 
    Zones[size].demand = demand;
    Zones[size].touched = touched;
-
    Zones[size].tfIndex = tfIndex;
 
    Zones[size].upper = upper;
@@ -423,11 +436,9 @@ void AddZone(
 // ----------------------------------------------------------
 // BUILD DEMAND ZONE
 //
-// Primary origin: last bearish candle in the base.
-// Base may include bearish and neutral candles.
-//
-// Upper: highest body boundary across the base.
-// Lower: lowest wick across the base.
+// Primary origin: last bearish candle in base.
+// Upper: highest body boundary.
+// Lower: lowest wick.
 // ----------------------------------------------------------
 
 void BuildDemandZone(
@@ -439,10 +450,10 @@ void BuildDemandZone(
 {
    int origin = breakIndex+1;
 
-   if(origin >= total)
+   if(origin>=total)
       return;
 
-   if(rates[origin].close >= rates[origin].open)
+   if(rates[origin].close>=rates[origin].open)
       return;
 
    int baseCount = 0;
@@ -454,13 +465,11 @@ void BuildDemandZone(
    datetime baseStart = rates[origin].time;
    datetime baseEnd = rates[origin].time;
 
-   for(int b = origin;
-       b < origin+InpMaxBaseCandles && b < total-1;
+   for(int b=origin;
+       b<origin+InpMaxBaseCandles && b<total-1;
        b++)
    {
-      // Stop when bullish continuation candles appear.
-
-      if(rates[b].close > rates[b].open)
+      if(rates[b].close>rates[b].open)
          break;
 
       double bodyHigh = MathMax(
@@ -471,16 +480,14 @@ void BuildDemandZone(
       upper = MathMax(upper,bodyHigh);
       lower = MathMin(lower,rates[b].low);
 
-      // Last bearish candle is the primary origin.
-
-      if(rates[b].close < rates[b].open)
+      if(rates[b].close<rates[b].open)
          primaryOrigin = b;
 
       baseEnd = rates[b].time;
       baseCount++;
    }
 
-   if(baseCount <= 0 || primaryOrigin < 0)
+   if(baseCount<=0 || primaryOrigin<0)
       return;
 
    bool touched = HasPriceEnteredZone(
@@ -506,14 +513,11 @@ void BuildDemandZone(
 // ----------------------------------------------------------
 // BUILD SUPPLY ZONE
 //
-// Primary origin: last bullish candle in the base.
-// Base may include bullish and neutral candles.
+// Primary origin: last bullish candle in base.
+// Upper: highest wick.
+// Lower: lowest body boundary.
 //
-// Upper: highest wick across the base.
-// Lower: lowest body boundary across the base.
-//
-// Mirrored supply boundaries remain experimental
-// pending separate PFLS validation.
+// Mirrored supply boundaries remain experimental.
 // ----------------------------------------------------------
 
 void BuildSupplyZone(
@@ -525,10 +529,10 @@ void BuildSupplyZone(
 {
    int origin = breakIndex+1;
 
-   if(origin >= total)
+   if(origin>=total)
       return;
 
-   if(rates[origin].close <= rates[origin].open)
+   if(rates[origin].close<=rates[origin].open)
       return;
 
    int baseCount = 0;
@@ -540,13 +544,11 @@ void BuildSupplyZone(
    datetime baseStart = rates[origin].time;
    datetime baseEnd = rates[origin].time;
 
-   for(int b = origin;
-       b < origin+InpMaxBaseCandles && b < total-1;
+   for(int b=origin;
+       b<origin+InpMaxBaseCandles && b<total-1;
        b++)
    {
-      // Stop when bearish continuation candles appear.
-
-      if(rates[b].close < rates[b].open)
+      if(rates[b].close<rates[b].open)
          break;
 
       upper = MathMax(upper,rates[b].high);
@@ -558,16 +560,14 @@ void BuildSupplyZone(
 
       lower = MathMin(lower,bodyLow);
 
-      // Last bullish candle is the primary origin.
-
-      if(rates[b].close > rates[b].open)
+      if(rates[b].close>rates[b].open)
          primaryOrigin = b;
 
       baseEnd = rates[b].time;
       baseCount++;
    }
 
-   if(baseCount <= 0 || primaryOrigin < 0)
+   if(baseCount<=0 || primaryOrigin<0)
       return;
 
    bool touched = HasPriceEnteredZone(
@@ -612,14 +612,11 @@ void ScanTimeframe(int tfIndex)
 
    int required = InpSwingStrength*2+10;
 
-   if(copied < required)
+   if(copied<required)
       return;
 
-   // Index 0 is forming.
-   // BOS detection uses completed candles only.
-
-   for(int s = copied-InpSwingStrength-2;
-       s >= 1;
+   for(int s=copied-InpSwingStrength-2;
+       s>=1;
        s--)
    {
       double brokenHigh = 0.0;
@@ -649,14 +646,14 @@ void ScanTimeframe(int tfIndex)
       double candleRange =
          rates[s].high-rates[s].low;
 
-      if(candleRange <= 0.0)
+      if(candleRange<=0.0)
          continue;
 
       double bodyRatio =
          MathAbs(rates[s].close-rates[s].open)
          /candleRange*100.0;
 
-      if(bodyRatio < InpMinimumBodyRatio)
+      if(bodyRatio<InpMinimumBodyRatio)
          continue;
 
       if(bullishBreak)
@@ -698,15 +695,17 @@ void DrawZone(PFLSZone &zone)
    string typeName =
       zone.demand ? "DEMAND" : "SUPPLY";
 
+   // CORRECTED TIMESTAMP CONVERSION
+
    string objectName =
       PREFIX+
       timeframeName+"_"+
       typeName+"_"+
-      LongToString((long)zone.originTime);
+      ZoneTimeKey(zone.originTime);
 
    int chartSeconds = PeriodSeconds(_Period);
 
-   if(chartSeconds <= 0)
+   if(chartSeconds<=0)
       chartSeconds = 60;
 
    datetime endTime =
@@ -805,7 +804,7 @@ void DrawZone(PFLSZone &zone)
    }
 
 
-   // MIDPOINT / CONSEQUENT ENCROACHMENT
+   // MIDPOINT LINE
 
    if(InpShowMidpoint)
    {
@@ -888,21 +887,21 @@ void CalculateNearestZones()
       SYMBOL_BID
    );
 
-   if(price <= 0.0)
+   if(price<=0.0)
       return;
 
-   for(int i = 0; i < ArraySize(Zones); i++)
+   for(int i=0; i<ArraySize(Zones); i++)
    {
       PFLSZone zone = Zones[i];
 
       if(zone.touched)
          continue;
 
-      if(!zone.demand && zone.lower > price)
+      if(!zone.demand && zone.lower>price)
       {
          double distance = zone.lower-price;
 
-         if(distance < NearestSupplyDistance)
+         if(distance<NearestSupplyDistance)
          {
             NearestSupplyDistance = distance;
             NearestSupplyPrice = zone.lower;
@@ -910,11 +909,11 @@ void CalculateNearestZones()
          }
       }
 
-      if(zone.demand && zone.upper < price)
+      if(zone.demand && zone.upper<price)
       {
          double distance = price-zone.upper;
 
-         if(distance < NearestDemandDistance)
+         if(distance<NearestDemandDistance)
          {
             NearestDemandDistance = distance;
             NearestDemandPrice = zone.upper;
@@ -946,7 +945,7 @@ void DrawPanel()
 
    int enabledCount = 0;
 
-   for(int i = 0; i < PFLS_TF_COUNT; i++)
+   for(int i=0; i<PFLS_TF_COUNT; i++)
    {
       if(TFEnabled[i])
          enabledCount++;
@@ -970,7 +969,7 @@ void DrawPanel()
 
    panelText += "------------------------\n";
 
-   for(int i = 0; i < PFLS_TF_COUNT; i++)
+   for(int i=0; i<PFLS_TF_COUNT; i++)
    {
       if(!TFEnabled[i])
          continue;
@@ -988,7 +987,7 @@ void DrawPanel()
       "NEAREST FRESH SUPPLY: "+
       NearestSupplyTF+"\n";
 
-   if(NearestSupplyPrice > 0.0)
+   if(NearestSupplyPrice>0.0)
    {
       panelText +=
          DoubleToString(NearestSupplyPrice,_Digits)+
@@ -999,7 +998,7 @@ void DrawPanel()
       "NEAREST FRESH DEMAND: "+
       NearestDemandTF+"\n";
 
-   if(NearestDemandPrice > 0.0)
+   if(NearestDemandPrice>0.0)
    {
       panelText +=
          DoubleToString(NearestDemandPrice,_Digits)+
@@ -1009,7 +1008,7 @@ void DrawPanel()
    panelText += "Research only - no trading";
 
 
-   if(ObjectFind(0,name) < 0)
+   if(ObjectFind(0,name)<0)
    {
       ObjectCreate(
          0,
@@ -1078,7 +1077,7 @@ void ScanAllTimeframes()
 
    ClearPFLSObjects();
 
-   for(int i = 0; i < PFLS_TF_COUNT; i++)
+   for(int i=0; i<PFLS_TF_COUNT; i++)
    {
       if(!TFEnabled[i])
          continue;
@@ -1086,9 +1085,9 @@ void ScanAllTimeframes()
       ScanTimeframe(i);
    }
 
-   // Only untouched zones are drawn.
+   // Draw only zones never entered by price.
 
-   for(int i = 0; i < ArraySize(Zones); i++)
+   for(int i=0; i<ArraySize(Zones); i++)
    {
       if(!Zones[i].touched)
          DrawZone(Zones[i]);
@@ -1111,7 +1110,7 @@ int OnInit()
    LoadTimeframeSettings();
 
    Print(
-      "PFLS 2.00 Fresh Zone Mapper started on ",
+      "PFLS 2.001 Fresh Zone Mapper started on ",
       _Symbol
    );
 
@@ -1166,5 +1165,5 @@ void OnDeinit(const int reason)
 
    ClearPFLSObjects();
 
-   Print("PFLS 2.00 Fresh Zone Mapper stopped.");
+   Print("PFLS 2.001 Fresh Zone Mapper stopped.");
 }
